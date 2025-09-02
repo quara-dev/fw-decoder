@@ -105,7 +105,19 @@ pub fn app(_props: &()) -> Html {
                     match decode_log_file(file, version, log_level).await {
                         Ok(raw) => {
                             progress_message.set("Parsing decoded content...".to_string());
-                            web_sys::console::log_1(&raw.clone().into());
+                            web_sys::console::log_1(&format!("Decoder response: {}", raw.clone()).into());
+                            
+                            // Check if response is empty or just whitespace
+                            if raw.trim().is_empty() {
+                                processing_state.set(ProcessingState::Error("Decoder returned empty result. File may be invalid or corrupted.".to_string()));
+                                progress_message.set("No output from decoder".to_string());
+                                log_sessions.set(vec![LogSession {
+                                    id: 0,
+                                    content: "No output from decoder. The file may be invalid, corrupted, or not in the expected format.".to_string(),
+                                    timestamp: None,
+                                }]);
+                                return;
+                            }
                             
                             // Use setTimeout to allow UI to update before parsing
                             let processing_state_inner = processing_state.clone();
@@ -116,9 +128,19 @@ pub fn app(_props: &()) -> Html {
                             let closure = Closure::wrap(Box::new(move || {
                                 // Parse the log content into sessions
                                 let sessions = parse_log_sessions(&raw_inner);
-                                log_sessions_inner.set(sessions);
-                                processing_state_inner.set(ProcessingState::Success);
-                                progress_message_inner.set("Processing completed successfully!".to_string());
+                                if sessions.is_empty() {
+                                    log_sessions_inner.set(vec![LogSession {
+                                        id: 0,
+                                        content: "Decoder output did not contain any parseable log sessions.".to_string(),
+                                        timestamp: None,
+                                    }]);
+                                    processing_state_inner.set(ProcessingState::Error("No log sessions found in decoder output".to_string()));
+                                    progress_message_inner.set("No log sessions found".to_string());
+                                } else {
+                                    log_sessions_inner.set(sessions);
+                                    processing_state_inner.set(ProcessingState::Success);
+                                    progress_message_inner.set("Processing completed successfully!".to_string());
+                                }
                             }) as Box<dyn Fn()>);
                             
                             web_sys::window()

@@ -28,6 +28,9 @@ COPY --from=builder /app/pkg /usr/share/nginx/html/pkg/
 # Copy decoders folder
 COPY decoders /app/decoders
 
+# Make decoder files executable
+RUN chmod +x /app/decoders/decoder_*
+
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 
