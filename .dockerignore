@@ -1,0 +1,8 @@
+# Docker ignore file
+target/
+Cargo.lock
+.git/
+.gitignore
+README.md
+DEPLOYMENT.md
+*.log
