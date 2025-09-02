@@ -8,6 +8,49 @@ use yew::platform::spawn_local;
 pub struct LogSession {
     pub id: usize,
     pub content: String,
+    pub timestamp: Option<String>, // Human-readable timestamp
+}
+
+fn parse_date_time_line(line: &str) -> Option<u64> {
+    // Parse both formats:
+    // "Date time set rcvd: 1756474625" (standalone)
+    // "69808ms		[SYS_PROTOCOL_DATE_TIME]	Date time set rcvd: 1756474625" (with timestamp and module)
+    
+    if line.contains("Date time set rcvd:") {
+        // Find the part after "Date time set rcvd:"
+        if let Some(start_pos) = line.find("Date time set rcvd:") {
+            let after_colon = &line[start_pos + "Date time set rcvd:".len()..];
+            let timestamp_str = after_colon.trim();
+            if let Ok(epoch) = timestamp_str.parse::<u64>() {
+                return Some(epoch);
+            }
+        }
+    }
+    None
+}
+
+fn epoch_to_local_time(epoch: u64) -> String {
+    // Convert epoch timestamp to human-readable format
+    web_sys::console::log_1(&format!("Converting epoch: {}", epoch).into());
+    
+    // Create JavaScript Date object with epoch time in milliseconds
+    let timestamp_ms = (epoch as f64) * 1000.0;
+    web_sys::console::log_1(&format!("Timestamp in ms: {}", timestamp_ms).into());
+    
+    let js_date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(timestamp_ms));
+    
+    // Use basic toString() method
+    match js_date.to_string().as_string() {
+        Some(date_str) => {
+            web_sys::console::log_1(&format!("Formatted result: {}", date_str).into());
+            date_str
+        },
+        None => {
+            let fallback = format!("Epoch: {}", epoch);
+            web_sys::console::log_1(&format!("Fallback result: {}", fallback).into());
+            fallback
+        }
+    }
 }
 
 fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
@@ -16,10 +59,18 @@ fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
     let mut session_id = 0;
     let mut last_timestamp: Option<u64> = None;
     let mut found_first_timestamp = false;
+    let mut current_session_time: Option<String> = None;
     
     for line in log_content.lines() {
         let line = line.trim();
         if line.is_empty() {
+            continue;
+        }
+        
+        // Check for "Date time set rcvd" line to extract epoch timestamp
+        if let Some(epoch_time) = parse_date_time_line(line) {
+            current_session_time = Some(epoch_to_local_time(epoch_time));
+            current_session.push_str(&format!("{}\n", line));
             continue;
         }
         
@@ -37,9 +88,11 @@ fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
                             sessions.push(LogSession {
                                 id: session_id,
                                 content: current_session.trim().to_string(),
+                                timestamp: current_session_time.clone(),
                             });
                             session_id += 1;
                             current_session.clear();
+                            current_session_time = None; // Reset for new session
                         }
                     }
                 }
@@ -61,6 +114,7 @@ fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
         sessions.push(LogSession {
             id: session_id,
             content: current_session.trim().to_string(),
+            timestamp: current_session_time,
         });
     }
     
@@ -69,6 +123,7 @@ fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
         sessions.push(LogSession {
             id: 0,
             content: log_content.to_string(),
+            timestamp: None,
         });
     }
     
@@ -206,6 +261,7 @@ pub fn App(_props: &()) -> Html {
                     log_sessions.set(vec![LogSession {
                         id: 0,
                         content: "No file selected".to_string(),
+                        timestamp: None,
                     }]);
                 }
             });
@@ -265,9 +321,17 @@ pub fn App(_props: &()) -> Html {
                         <>
                             { for log_sessions.iter().map(|session| {
                                 let session_title = if log_sessions.len() > 1 {
-                                    format!("Session {} (Boot Cycle {})", session.id + 1, session.id + 1)
+                                    if let Some(ref timestamp) = session.timestamp {
+                                        format!("Session {} (Boot Cycle {}) - {}", session.id + 1, session.id + 1, timestamp)
+                                    } else {
+                                        format!("Session {} (Boot Cycle {})", session.id + 1, session.id + 1)
+                                    }
                                 } else {
-                                    "Log Output".to_string()
+                                    if let Some(ref timestamp) = session.timestamp {
+                                        format!("Log Output - {}", timestamp)
+                                    } else {
+                                        "Log Output".to_string()
+                                    }
                                 };
                                 
                                 html! {
