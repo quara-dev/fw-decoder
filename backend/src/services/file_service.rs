@@ -2,10 +2,11 @@ use std::{
     fs::File,
     io::Write,
     path::PathBuf,
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH, Duration},
 };
 use axum::extract::Multipart;
+use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
 use crate::{config::Config, services::decoder_service::ServiceError};
 
 pub struct FileProcessor {
@@ -51,7 +52,7 @@ impl FileProcessor {
         Err(ServiceError::InvalidInput("No file found in upload".to_string()))
     }
 
-    pub fn run_decoder(&self, input_file: &PathBuf, decoder_version: &str, log_level: &str) -> Result<String, ServiceError> {
+    pub async fn run_decoder(&self, input_file: &PathBuf, decoder_version: &str, log_level: &str) -> Result<String, ServiceError> {
         let decoder_path = self.config.decoders_dir().join(decoder_version);
         let log_path = input_file.with_extension("log");
         
@@ -60,20 +61,48 @@ impl FileProcessor {
             return Err(ServiceError::NotFound(format!("Decoder '{}' not found", decoder_version)));
         }
         
-        let output = Command::new(&decoder_path)
+        tracing::info!("Starting decoder execution: {} with log level {}", decoder_version, log_level);
+        
+        // Create output file for decoder stdout
+        let output_file = File::create(&log_path)
+            .map_err(|e| ServiceError::IoError(e))?;
+        
+        // Run decoder with timeout (30 minutes max)
+        let mut command = TokioCommand::new(&decoder_path);
+        command
             .arg(input_file.to_str().unwrap())
             .arg("-l")
             .arg(log_level)
-            .stdout(File::create(&log_path)?)
-            .output()
-            .map_err(|e| ServiceError::IoError(e))?;
+            .stdout(output_file)
+            .stderr(std::process::Stdio::piped());
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ServiceError::InvalidInput(format!("Decoder error: {}", stderr)));
-        }
+        tracing::info!("Decoder process spawned, waiting for completion...");
+
+        // Set timeout to 30 minutes for large files
+        let timeout_duration = Duration::from_secs(30 * 60);
         
-        self.read_output_file(&log_path)
+        let result = timeout(timeout_duration, command.output()).await;
+        
+        match result {
+            Ok(Ok(output)) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    tracing::error!("Decoder failed with error: {}", stderr);
+                    return Err(ServiceError::InvalidInput(format!("Decoder error: {}", stderr)));
+                }
+                
+                tracing::info!("Decoder completed successfully, reading output...");
+                self.read_output_file(&log_path)
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Decoder process error: {}", e);
+                Err(ServiceError::IoError(e))
+            }
+            Err(_) => {
+                tracing::error!("Decoder process timed out after 30 minutes");
+                Err(ServiceError::InvalidInput("Decoder process timed out. The file might be too large or corrupted.".to_string()))
+            }
+        }
     }
 
     fn read_output_file(&self, log_path: &PathBuf) -> Result<String, ServiceError> {
