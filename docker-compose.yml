@@ -4,9 +4,12 @@ services:
   fw_log_decoder:
     build: .
     ports:
-      - "8080:8080"
+      - "80:8080"   # HTTP
+      - "443:8443"  # HTTPS
     volumes:
-      - ./decoders:/app/decoders:ro  # Mount decoders as read-only
+      - ./decoders:/app/decoders:ro
+      - ./ssl:/etc/ssl/certs:ro  # Mount SSL certificates
     environment:
       - RUST_LOG=info
+      - DOMAIN=${DOMAIN:-localhost}
     restart: unless-stopped
