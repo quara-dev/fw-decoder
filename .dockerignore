@@ -6,3 +6,8 @@ Cargo.lock
 README.md
 DEPLOYMENT.md
 *.log
+
+# SSL certificates (mounted as volumes)
+ssl/
+*.pem
+*.key
