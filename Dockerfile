@@ -31,6 +31,10 @@ COPY decoders /app/decoders
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 
+# Copy startup script
+COPY start-nginx.sh /usr/local/bin/start-nginx.sh
+RUN chmod +x /usr/local/bin/start-nginx.sh
+
 # Copy supervisor configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 

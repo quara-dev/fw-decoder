@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 
 pub async fn fetch_versions() -> Result<Vec<String>, JsValue> {
     let window = web_sys::window().ok_or("window not available")?;
-    let resp_value = JsFuture::from(window.fetch_with_str("http://localhost:8080/api/versions")).await?;
+    let resp_value = JsFuture::from(window.fetch_with_str("/api/versions")).await?;
     let resp: web_sys::Response = resp_value.dyn_into()?;
     let json = JsFuture::from(resp.json()?).await?;
     let arr = js_sys::Array::from(&json);
@@ -18,7 +18,7 @@ pub async fn decode_log_file(file: web_sys::File, version: String, log_level: St
     let form = web_sys::FormData::new()?;
     form.append_with_blob("file", &file)?;
     
-    let url = format!("http://localhost:8080/api/decode?version={}&log_level={}", version, log_level);
+    let url = format!("/api/decode?version={}&log_level={}", version, log_level);
     let opts = web_sys::RequestInit::new();
     opts.set_method("POST");
     opts.set_body(&form.into());
