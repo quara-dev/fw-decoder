@@ -95,6 +95,13 @@ pub fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
             continue;
         }
         
+        // Skip decoder messages that shouldn't be displayed
+        if line.contains("Using default dictionnay") || 
+           line.contains("Using default dictionary") ||
+           line.starts_with("Using default") {
+            continue;
+        }
+        
         // Check for "Date time set rcvd" line to extract epoch timestamp
         if let Some(epoch_time) = parse_date_time_line(line) {
             current_session_time = Some(epoch_to_local_time(epoch_time));
@@ -144,13 +151,27 @@ pub fn parse_log_sessions(log_content: &str) -> Vec<LogSession> {
         });
     }
     
-    // If no sessions were created, treat entire content as one session
+    // Filter out sessions with only one line (likely not useful boot sessions)
+    sessions.retain(|session| {
+        let line_count = session.content.lines().filter(|line| !line.trim().is_empty()).count();
+        line_count > 1
+    });
+    
+    // Re-assign session IDs after filtering
+    for (index, session) in sessions.iter_mut().enumerate() {
+        session.id = index;
+    }
+    
+    // If no sessions were created, treat entire content as one session (but only if it has multiple lines)
     if sessions.is_empty() && !log_content.trim().is_empty() {
-        sessions.push(LogSession {
-            id: 0,
-            content: log_content.to_string(),
-            timestamp: None,
-        });
+        let line_count = log_content.lines().filter(|line| !line.trim().is_empty()).count();
+        if line_count > 1 {
+            sessions.push(LogSession {
+                id: 0,
+                content: log_content.to_string(),
+                timestamp: None,
+            });
+        }
     }
     
     sessions
