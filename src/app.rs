@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::types::LogSession;
 use crate::api::{fetch_versions, decode_log_file};
 use crate::parser::parse_log_sessions;
-use crate::components::SessionView;
+use crate::components::EnhancedSessionView;
 
 #[derive(Clone, PartialEq)]
 pub enum ProcessingState {
@@ -269,7 +269,7 @@ pub fn app(_props: &()) -> Html {
                 }}
             </div>
             <div style="flex:1; display:flex; flex-direction:column; padding:1em; gap:1em; overflow-y:auto;">
-                <SessionView sessions={(*log_sessions).clone()} />
+                <EnhancedSessionView sessions={(*log_sessions).clone()} />
             </div>
         </div>
     }
