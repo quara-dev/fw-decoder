@@ -14,3 +14,9 @@ pub fn run_app() {
     let root = document.get_element_by_id("root").unwrap();
     yew::Renderer::<App>::with_root(root).render();
 }
+
+// Export format function for testing
+#[wasm_bindgen]
+pub fn format_timestamp_ms_test(timestamp_ms: u64) -> String {
+    parser::format_timestamp_ms(timestamp_ms)
+}
