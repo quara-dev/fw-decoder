@@ -52,26 +52,38 @@ impl FileProcessor {
         Err(ServiceError::InvalidInput("No file found in upload".to_string()))
     }
 
-    pub async fn run_decoder(&self, input_file: &PathBuf, decoder_version: &str, log_level: &str) -> Result<String, ServiceError> {
-        let decoder_path = self.config.decoders_dir().join(decoder_version);
+    pub async fn run_decoder(&self, input_file: &PathBuf, firmware_version: &str, log_level: &str) -> Result<String, ServiceError> {
+        // Use the firmware version to find the corresponding dictionary file in downloads
+        let dict_filename = format!("{}.log", firmware_version);
+        let dict_path = self.config.downloads_dir().join(&dict_filename);
+        
+        // Check if dictionary file exists
+        if !dict_path.exists() {
+            return Err(ServiceError::NotFound(format!("Dictionary file '{}' not found in downloads", dict_filename)));
+        }
+        
+        // Use the standalone log_decoder program
+        let decoder_path = PathBuf::from("/usr/local/bin/log_decoder");
         
         // Check if decoder exists
         if !decoder_path.exists() {
-            return Err(ServiceError::NotFound(format!("Decoder '{}' not found", decoder_version)));
+            return Err(ServiceError::NotFound("Log decoder program not found".to_string()));
         }
         
-        tracing::info!("Starting decoder execution: {} with log level {}", decoder_version, log_level);
+        tracing::info!("Starting log decoder execution with dictionary: {} and log level {}", dict_filename, log_level);
         
-        // Run decoder with timeout (30 minutes max) and capture output directly
+        // Run log_decoder with timeout (30 minutes max) and capture output directly
         let mut command = TokioCommand::new(&decoder_path);
         command
-            .arg(input_file.to_str().unwrap())
+            .arg(input_file.to_str().unwrap())  // binary syslog file
+            .arg("-d")
+            .arg(dict_path.to_str().unwrap())   // dictionary file
             .arg("-l")
-            .arg(log_level)
+            .arg(log_level)                     // log level
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        tracing::info!("Decoder process spawned, waiting for completion...");
+        tracing::info!("Log decoder process spawned, waiting for completion...");
 
         // Set timeout to 30 minutes for large files
         let timeout_duration = Duration::from_secs(30 * 60);
@@ -83,12 +95,12 @@ impl FileProcessor {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 
-                tracing::info!("Decoder completed. Exit status: {}, stdout length: {}, stderr length: {}", 
+                tracing::info!("Log decoder completed. Exit status: {}, stdout length: {}, stderr length: {}", 
                               output.status, stdout.len(), stderr.len());
                 
                 if !output.status.success() {
-                    tracing::error!("Decoder failed with error: {}", stderr);
-                    return Err(ServiceError::InvalidInput(format!("Decoder error: {}", stderr)));
+                    tracing::error!("Log decoder failed with error: {}", stderr);
+                    return Err(ServiceError::InvalidInput(format!("Log decoder error: {}", stderr)));
                 }
                 
                 // Return stdout content, or stderr if stdout is empty
@@ -107,8 +119,8 @@ impl FileProcessor {
                 Err(ServiceError::IoError(e))
             }
             Err(_) => {
-                tracing::error!("Decoder process timed out after 30 minutes");
-                Err(ServiceError::InvalidInput("Decoder process timed out. The file might be too large or corrupted.".to_string()))
+                tracing::error!("Log decoder process timed out after 30 minutes");
+                Err(ServiceError::InvalidInput("Log decoder process timed out. The file might be too large or corrupted.".to_string()))
             }
         }
     }

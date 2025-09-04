@@ -3,6 +3,7 @@ use std::{fs, path::PathBuf};
 #[derive(Clone)]
 pub struct Config {
     pub decoders_path: String,
+    pub downloads_path: String,
     pub temp_dir: String,
     pub bind_address: String,
 }
@@ -12,6 +13,8 @@ impl Config {
         Self {
             decoders_path: std::env::var("DECODERS_PATH")
                 .unwrap_or_else(|_| "/app/decoders".to_string()),
+            downloads_path: std::env::var("DOWNLOADS_PATH")
+                .unwrap_or_else(|_| "/app/downloads".to_string()),
             temp_dir: std::env::var("TEMP_DIR")
                 .unwrap_or_else(|_| "/tmp".to_string()),
             bind_address: std::env::var("BIND_ADDRESS")
@@ -21,6 +24,10 @@ impl Config {
 
     pub fn decoders_dir(&self) -> PathBuf {
         PathBuf::from(&self.decoders_path)
+    }
+
+    pub fn downloads_dir(&self) -> PathBuf {
+        PathBuf::from(&self.downloads_path)
     }
 
     pub fn temp_dir(&self) -> PathBuf {

@@ -1,4 +1,4 @@
-FROM rust:1.81 as builder
+FROM rust:1.82 as builder
 
 # Install wasm-pack
 RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -8,8 +8,12 @@ WORKDIR /app
 COPY . .
 RUN wasm-pack build --target web
 
-# Build backend
+# Build backend and log_decoder
 WORKDIR /app/backend
+RUN cargo build --release
+
+# Build log_decoder
+WORKDIR /app/log_decoder
 RUN cargo build --release
 
 # Runtime stage
@@ -24,8 +28,9 @@ RUN apt-get update && apt-get install -y \
     cron \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy built backend binary
+# Copy binaries
 COPY --from=builder /app/backend/target/release/fw_log_backend /usr/local/bin/
+COPY --from=builder /app/log_decoder/target/release/decoder /usr/local/bin/log_decoder
 
 # Copy frontend files to nginx
 COPY --from=builder /app/index.html /usr/share/nginx/html/
