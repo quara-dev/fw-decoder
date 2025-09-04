@@ -8,12 +8,8 @@ WORKDIR /app
 COPY . .
 RUN wasm-pack build --target web
 
-# Build backend and log_decoder
+# Build backend with integrated log decoder
 WORKDIR /app/backend
-RUN cargo build --release
-
-# Build log_decoder
-WORKDIR /app/log_decoder
 RUN cargo build --release
 
 # Runtime stage
@@ -28,19 +24,12 @@ RUN apt-get update && apt-get install -y \
     cron \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries
+# Copy backend binary
 COPY --from=builder /app/backend/target/release/fw_log_backend /usr/local/bin/
-COPY --from=builder /app/log_decoder/target/release/decoder /usr/local/bin/log_decoder
 
-# Copy frontend files to nginx
+# Copy frontend files
 COPY --from=builder /app/index.html /usr/share/nginx/html/
 COPY --from=builder /app/pkg /usr/share/nginx/html/pkg/
-
-# Copy decoders folder
-COPY decoders /app/decoders
-
-# Make decoder files executable
-RUN chmod +x /app/decoders/decoder_*
 
 # Copy Azure downloader files
 COPY azure_blob_downloader.py /app/

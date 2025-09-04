@@ -2,6 +2,7 @@ mod config;
 mod handlers;
 mod services;
 mod types;
+mod parser;
 
 use axum::{
     routing::{get, post},
