@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  fw_log_decoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:8080"
+    volumes:
+      # Mount downloads directory to persist downloaded files
+      - ./downloads:/app/downloads
+      # Mount logs directory to access logs from host
+      - ./logs:/app/logs
+      # Optional: Mount custom Azure config (uncomment and edit path as needed)
+      # - ./azure_config_custom.json:/app/azure_config.json
+    environment:
+      # Optional: Override Azure configuration via environment variables
+      # AZURE_CONNECTION_STRING: "your_connection_string_here"
+      # AZURE_CONTAINER_NAME: "your_container_name_here"
+      - RUST_LOG=info
+    restart: unless-stopped
