@@ -61,11 +61,11 @@ pub async fn decode_file(
 
 pub async fn refresh_azure_files(State(_config): State<Arc<Config>>) -> Result<Json<serde_json::Value>, StatusCode> {
     // Run the Azure blob downloader script in the background with virtual environment activated
-    // Use --clear-existing flag to delete old files before downloading
+    // Note: Not using --clear-existing to avoid directory locking issues
     let result = task::spawn_blocking(move || {
         let output = Command::new("bash")
             .arg("-c")
-            .arg("cd /app && source venv_azure/bin/activate && python3 azure_blob_downloader.py --clear-existing")
+            .arg("cd /app && source venv_azure/bin/activate && python3 azure_blob_downloader.py")
             .output();
         
         match output {

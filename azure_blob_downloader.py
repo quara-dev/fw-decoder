@@ -289,7 +289,7 @@ def download_blob_files(config, logger, clear_existing=False):
             future_to_blob = {}
             for blob in blobs:
                 future = executor.submit(download_single_blob, 
-                                       container_client, blob, config, logger)
+                                       blob_service_client, config['container_name'], blob, config, logger)
                 future_to_blob[future] = blob.name
             
             # Process completed downloads

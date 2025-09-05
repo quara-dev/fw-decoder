@@ -1,8 +1,15 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, BufReader};
 use std::path::Path;
 use anyhow::{Result, Context};
 use regex::Regex;
+
+// Resource optimization constants for large file handling
+const CHUNK_SIZE: usize = 16 * 1024 * 1024;  // 16MB chunks for binary reading
+const MAX_ENTRIES_PER_BATCH: usize = 10000;  // Process entries in batches 
+const PROGRESS_REPORT_INTERVAL: usize = 100000; // Report progress every 100k entries
+const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB file size limit
 
 /// Represents a log entry from the dictionary
 #[derive(Debug, Clone)]
@@ -171,12 +178,34 @@ impl SyslogParser {
         })
     }
 
-    /// Parse binary log file and return formatted logs (optimized)
+    /// Parse binary log file and return formatted logs (optimized for large files)
     pub fn parse_binary<P: AsRef<Path>>(&self, binary_path: P, min_log_level: u8) -> Result<Vec<ParsedLog>> {
-        let binary_entries = self.read_binary_file(binary_path)?;
+        // Check file size first
+        let metadata = std::fs::metadata(&binary_path)
+            .with_context(|| format!("Failed to get file metadata: {}", binary_path.as_ref().display()))?;
         
-        // Pre-allocate vector with estimated capacity
-        let mut parsed_logs = Vec::with_capacity(binary_entries.len());
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(anyhow::anyhow!("File too large: {} bytes (max: {} bytes)", 
+                                     metadata.len(), MAX_FILE_SIZE));
+        }
+
+        println!("Parsing binary file: {} ({:.2} MB)", 
+                 binary_path.as_ref().display(), 
+                 metadata.len() as f64 / (1024.0 * 1024.0));
+
+        // Use streaming reader for large files, regular reader for small files
+        if metadata.len() > CHUNK_SIZE as u64 {
+            self.parse_binary_streaming(binary_path, min_log_level)
+        } else {
+            self.parse_binary_legacy(binary_path, min_log_level)
+        }
+    }
+
+    /// Legacy method for small files (loads entire file into memory)
+    fn parse_binary_legacy<P: AsRef<Path>>(&self, binary_path: P, min_log_level: u8) -> Result<Vec<ParsedLog>> {
+        let binary_entries = self.read_binary_file_legacy(binary_path)?;
+        
+        let mut parsed_logs = Vec::with_capacity(binary_entries.len().min(MAX_ENTRIES_PER_BATCH));
 
         for entry in binary_entries {
             if let Some(parsed_log) = self.process_binary_entry(&entry, min_log_level) {
@@ -189,8 +218,139 @@ impl SyslogParser {
         Ok(parsed_logs)
     }
 
-    /// Read and parse binary file structure (optimized)
-    fn read_binary_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<BinaryLogEntry>> {
+    /// Streaming method for large files (processes in chunks)
+    fn parse_binary_streaming<P: AsRef<Path>>(&self, binary_path: P, min_log_level: u8) -> Result<Vec<ParsedLog>> {
+        let file = File::open(&binary_path)
+            .with_context(|| format!("Failed to open binary file: {}", binary_path.as_ref().display()))?;
+        
+        let mut reader = BufReader::new(file);
+        let mut parsed_logs = Vec::new();
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+        let mut remainder = Vec::new();
+        let mut total_entries = 0;
+        let mut batch_count = 0;
+
+        loop {
+            // Read chunk from file
+            let bytes_read = reader.read(&mut buffer)
+                .with_context(|| "Failed to read from binary file")?;
+            
+            if bytes_read == 0 {
+                break; // End of file
+            }
+
+            // Combine remainder from previous chunk with new data
+            let mut chunk_data = remainder;
+            chunk_data.extend_from_slice(&buffer[..bytes_read]);
+
+            // Process entries from this chunk
+            let (entries, remaining_bytes) = self.parse_chunk(&chunk_data)?;
+            
+            // Process entries in batches to manage memory
+            for batch in entries.chunks(MAX_ENTRIES_PER_BATCH) {
+                for entry in batch {
+                    if let Some(parsed_log) = self.process_binary_entry(entry, min_log_level) {
+                        parsed_logs.push(parsed_log);
+                    }
+                    total_entries += 1;
+
+                    // Report progress periodically
+                    if total_entries % PROGRESS_REPORT_INTERVAL == 0 {
+                        println!("Processed {} entries...", total_entries);
+                    }
+                }
+                
+                batch_count += 1;
+                // Hint that batch processing is complete for memory management
+                if batch_count % 10 == 0 {
+                    // Allow garbage collector to reclaim memory from processed batches
+                    println!("Processed {} batches, {} entries total", batch_count, total_entries);
+                }
+            }
+
+            // Save incomplete data for next iteration
+            remainder = remaining_bytes;
+
+            // If we're at end of file but have remaining bytes, it's incomplete data
+            if bytes_read < CHUNK_SIZE && !remainder.is_empty() {
+                println!("Warning: {} incomplete bytes at end of file", remainder.len());
+                break;
+            }
+        }
+
+        println!("Streaming parse completed: {} logs from {} total entries (min level: {})", 
+                 parsed_logs.len(), total_entries, min_log_level);
+        Ok(parsed_logs)
+    }
+
+    /// Parse binary entries from a chunk of data, returning entries and any remaining bytes
+    fn parse_chunk(&self, data: &[u8]) -> Result<(Vec<BinaryLogEntry>, Vec<u8>)> {
+        let mut entries = Vec::new();
+        let mut offset = 0;
+
+        while offset + 8 <= data.len() {
+            // Read timestamp (32-bit)
+            let timestamp_ms = u32::from_le_bytes([
+                data[offset],
+                data[offset + 1], 
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            // Read log_id (32-bit)
+            let log_id_raw = u32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2], 
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            // Extract number of arguments and log offset
+            let num_args = ((log_id_raw >> 28) & 0xF) as u8;
+            let log_offset = log_id_raw & 0x0FFFFFFF;
+
+            // Check if we have enough data for all arguments
+            let args_size = num_args as usize * 4;
+            if offset + args_size > data.len() {
+                // Not enough data for arguments - return remaining data
+                let remaining = data[offset - 8..].to_vec(); // Include current entry header
+                return Ok((entries, remaining));
+            }
+
+            // Read arguments
+            let mut arguments = Vec::with_capacity(num_args as usize);
+            for _ in 0..num_args {
+                let arg = u32::from_le_bytes([
+                    data[offset],
+                    data[offset + 1],
+                    data[offset + 2],
+                    data[offset + 3],
+                ]);
+                arguments.push(arg);
+                offset += 4;
+            }
+
+            entries.push(BinaryLogEntry {
+                timestamp_ms,
+                log_id: log_offset,
+                arguments,
+            });
+        }
+
+        // Return any remaining bytes that couldn't form a complete entry
+        let remaining = if offset < data.len() {
+            data[offset..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Ok((entries, remaining))
+    }
+
+    /// Read and parse binary file structure (legacy method for small files)
+    fn read_binary_file_legacy<P: AsRef<Path>>(&self, path: P) -> Result<Vec<BinaryLogEntry>> {
         let contents = fs::read(&path)
             .with_context(|| format!("Failed to read binary file: {}", path.as_ref().display()))?;
 

@@ -2,15 +2,20 @@ use std::{
     fs::File,
     io::Write,
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH, Duration},
 };
 use axum::extract::Multipart;
 use syslog_decoder::SyslogParser;
+use tokio::time::timeout;
 use crate::{
     config::Config, 
     services::decoder_service::ServiceError, 
     parser::session_parser::parse_log_sessions
 };
+
+// Resource management constants
+const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30 * 60); // 30 minutes
+const MAX_UPLOAD_SIZE: usize = 500 * 1024 * 1024; // 500MB upload limit
 
 pub struct FileProcessor {
     config: Config,
@@ -33,6 +38,7 @@ impl FileProcessor {
             .map_err(|_| ServiceError::InvalidInput("Invalid multipart data".to_string()))?
         {
             if let Some(filename) = field.file_name() {
+                let filename = filename.to_string(); // Clone filename to avoid borrow issues
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -40,14 +46,32 @@ impl FileProcessor {
                 let temp_filename = format!("{}_{}", now, filename);
                 let filepath = temp_dir.join(&temp_filename);
                 
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|_| ServiceError::InvalidInput("Failed to read file data".to_string()))?;
-                
+                // Stream the file data instead of loading it all into memory
                 let mut file = File::create(&filepath)?;
-                file.write_all(&data)?;
+                let mut total_size = 0;
                 
+                // Process field in chunks to handle large files
+                let mut field = field;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|_| ServiceError::InvalidInput("Failed to read file chunk".to_string()))?
+                {
+                    // Check upload size limit
+                    total_size += chunk.len();
+                    if total_size > MAX_UPLOAD_SIZE {
+                        // Clean up partial file
+                        let _ = std::fs::remove_file(&filepath);
+                        return Err(ServiceError::InvalidInput(
+                            format!("File too large: {} bytes (max: {} bytes)", 
+                                   total_size, MAX_UPLOAD_SIZE)
+                        ));
+                    }
+                    
+                    file.write_all(&chunk)?;
+                }
+                
+                println!("Uploaded file: {} ({:.2} MB)", filename, total_size as f64 / (1024.0 * 1024.0));
                 return Ok(filepath);
             }
         }
@@ -71,30 +95,41 @@ impl FileProcessor {
         let log_level_num: u8 = log_level.parse()
             .map_err(|_| ServiceError::InvalidInput("Invalid log level".to_string()))?;
         
-        // Create syslog parser with dictionary
-        let parser = SyslogParser::new(&dict_path)
-            .map_err(|e| ServiceError::InvalidInput(format!("Failed to load dictionary: {}", e)))?;
+        // Run decoder with timeout protection
+        let result = timeout(PROCESSING_TIMEOUT, async {
+            // Create syslog parser with dictionary
+            let parser = SyslogParser::new(&dict_path)
+                .map_err(|e| ServiceError::InvalidInput(format!("Failed to load dictionary: {}", e)))?;
+            
+            // Parse binary file (this now handles large files with streaming)
+            let parsed_logs = parser.parse_binary(input_file, log_level_num)
+                .map_err(|e| ServiceError::InvalidInput(format!("Failed to parse binary file: {}", e)))?;
+            
+            // Always format logs with log levels - frontend will control display
+            let formatted_logs = parser.format_logs_with_options(&parsed_logs, true);
+            
+            // Join all formatted logs with newlines for session parsing
+            let decoded_text = formatted_logs.join("\n");
+            
+            // Parse into sessions
+            let sessions = parse_log_sessions(&decoded_text);
+            
+            // Return sessions as JSON
+            let sessions_json = serde_json::to_string(&sessions)
+                .map_err(|e| ServiceError::InvalidInput(format!("Failed to serialize sessions: {}", e)))?;
+            
+            println!("Syslog parsing completed successfully, {} logs processed, {} sessions created", 
+                     formatted_logs.len(), sessions.len());
+            
+            Ok::<String, ServiceError>(sessions_json)
+        }).await;
         
-        // Parse binary file
-        let parsed_logs = parser.parse_binary(input_file, log_level_num)
-            .map_err(|e| ServiceError::InvalidInput(format!("Failed to parse binary file: {}", e)))?;
-        
-        // Always format logs with log levels - frontend will control display
-        let formatted_logs = parser.format_logs_with_options(&parsed_logs, true);
-        
-        // Join all formatted logs with newlines for session parsing
-        let decoded_text = formatted_logs.join("\n");
-        
-        // Parse into sessions
-        let sessions = parse_log_sessions(&decoded_text);
-        
-        // Return sessions as JSON
-        let sessions_json = serde_json::to_string(&sessions)
-            .map_err(|e| ServiceError::InvalidInput(format!("Failed to serialize sessions: {}", e)))?;
-        
-        println!("Syslog parsing completed successfully, {} logs processed, {} sessions created", 
-                 formatted_logs.len(), sessions.len());
-        
-        Ok(sessions_json)
+        match result {
+            Ok(decoder_result) => decoder_result,
+            Err(_) => Err(ServiceError::InvalidInput(
+                format!("Processing timed out after {} minutes. File may be too large or corrupted.", 
+                       PROCESSING_TIMEOUT.as_secs() / 60)
+            ))
+        }
     }
 }
