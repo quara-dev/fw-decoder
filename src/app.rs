@@ -20,6 +20,7 @@ pub fn app(_props: &()) -> Html {
     let selected_version = use_state(|| String::new());
     let log_level = use_state(|| "4".to_string());
     let include_log_level = use_state(|| false);
+    let show_log_levels = use_state(|| false);
     let log_sessions = use_state(|| Vec::<LogSession>::new());
     let file = use_state(|| None);
     let processing_state = use_state(|| ProcessingState::Idle);
@@ -63,11 +64,11 @@ pub fn app(_props: &()) -> Html {
         })
     };
 
-    let on_include_log_level_change = {
-        let include_log_level = include_log_level.clone();
+    let on_show_log_levels_change = {
+        let show_log_levels = show_log_levels.clone();
         Callback::from(move |event: Event| {
             let target = event.target_unchecked_into::<HtmlInputElement>();
-            include_log_level.set(target.checked());
+            show_log_levels.set(target.checked());
         })
     };
 
@@ -180,12 +181,12 @@ pub fn app(_props: &()) -> Html {
                 <div style="display:flex; align-items:center; gap:0.5em;">
                     <input 
                         type="checkbox" 
-                        id="include-log-level"
-                        onchange={on_include_log_level_change} 
-                        checked={*include_log_level}
+                        id="show-log-levels"
+                        onchange={on_show_log_levels_change} 
+                        checked={*show_log_levels}
                     />
-                    <label for="include-log-level" style="color:#555; cursor:pointer;">
-                        { "Include log levels in output (Emergency, Alert, Critical, etc.)" }
+                    <label for="show-log-levels" style="color:#555; cursor:pointer;">
+                        { "Show log levels in display (Emergency, Alert, Critical, etc.)" }
                     </label>
                 </div>
                 
@@ -259,7 +260,7 @@ pub fn app(_props: &()) -> Html {
                 }}
             </div>
             <div style="flex:1; display:flex; flex-direction:column; padding:1em; gap:1em; overflow-y:auto;">
-                <EnhancedSessionView sessions={(*log_sessions).clone()} />
+                <EnhancedSessionView sessions={(*log_sessions).clone()} show_log_levels={*show_log_levels} />
             </div>
         </div>
     }

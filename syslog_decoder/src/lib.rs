@@ -342,14 +342,13 @@ impl SyslogParser {
     /// Convert log level number to descriptive string
     fn log_level_to_string(level: u8) -> &'static str {
         match level {
-            0 => "Emergency",
-            1 => "Alert", 
-            2 => "Critical",
-            3 => "Error",
-            4 => "Warning",
-            5 => "Notice",
-            6 => "Info",
-            7 => "Debug",
+            0 => "Critical",
+            1 => "FatalError",
+            2 => "Error",
+            3 => "Warning",
+            4 => "Info",
+            5 => "Debug",
+            6 => "Verbose",
             _ => "Unknown",
         }
     }
@@ -563,8 +562,8 @@ mod tests {
         
         // Test formatting with log level
         let formatted_with_level = parser.format_logs_with_options(&parsed_logs, true);
-        assert!(formatted_with_level[0].contains("[Warning]\t[TEST_MODULE]")); // Should contain log level "Warning" (level 4)
-        assert!(formatted_with_level[2].contains("[Alert]\t[SYS_INIT]")); // Should contain log level "Alert" (level 1)
+        assert!(formatted_with_level[0].contains("[Info]\t[TEST_MODULE]")); // Should contain log level "Info" (level 4)
+        assert!(formatted_with_level[2].contains("[FatalError]\t[SYS_INIT]")); // Should contain log level "FatalError" (level 1)
         
         // Verify structure: timestamp\t[log_level]\t[module]\tmessage
         let parts: Vec<&str> = formatted_with_level[0].split('\t').collect();
@@ -576,14 +575,13 @@ mod tests {
     #[test]
     fn test_log_level_strings() {
         // Test all log level string mappings
-        assert_eq!(SyslogParser::log_level_to_string(0), "Emergency");
-        assert_eq!(SyslogParser::log_level_to_string(1), "Alert");
-        assert_eq!(SyslogParser::log_level_to_string(2), "Critical");
-        assert_eq!(SyslogParser::log_level_to_string(3), "Error");
-        assert_eq!(SyslogParser::log_level_to_string(4), "Warning");
-        assert_eq!(SyslogParser::log_level_to_string(5), "Notice");
-        assert_eq!(SyslogParser::log_level_to_string(6), "Info");
-        assert_eq!(SyslogParser::log_level_to_string(7), "Debug");
+        assert_eq!(SyslogParser::log_level_to_string(0), "Critical");
+        assert_eq!(SyslogParser::log_level_to_string(1), "FatalError");
+        assert_eq!(SyslogParser::log_level_to_string(2), "Error");
+        assert_eq!(SyslogParser::log_level_to_string(3), "Warning");
+        assert_eq!(SyslogParser::log_level_to_string(4), "Info");
+        assert_eq!(SyslogParser::log_level_to_string(5), "Debug");
+        assert_eq!(SyslogParser::log_level_to_string(6), "Verbose");
         assert_eq!(SyslogParser::log_level_to_string(255), "Unknown"); // Test unknown level
     }
 
