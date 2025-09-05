@@ -1,0 +1,19 @@
+[package]
+name = "syslog_decoder"
+version = "0.1.0"
+edition = "2021"
+description = "Independent syslog parsing library for firmware log decoding"
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+tempfile = "3.0"
+
+[lib]
+name = "syslog_decoder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "syslog_parser"
+path = "src/bin/parser.rs"

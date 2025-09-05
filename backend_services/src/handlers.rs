@@ -42,7 +42,7 @@ pub async fn decode_file(
     // Run decoder
     match file_processor.run_decoder(&filepath, &query.version, &query.log_level).await {
         Ok(result) => Ok(Response::builder()
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
             .body(result)
             .unwrap()),
         Err(ServiceError::NotFound(msg)) => {

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   fw_log_decoder:
     build:

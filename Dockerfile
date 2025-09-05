@@ -53,11 +53,13 @@ COPY nginx.conf /etc/nginx/nginx.conf
 COPY start-nginx.sh /usr/local/bin/start-nginx.sh
 RUN chmod +x /usr/local/bin/start-nginx.sh
 
-# Create Azure downloader wrapper script
+# Create Azure downloader wrapper script with better logging
 RUN echo '#!/bin/bash' > /app/run_azure_download.sh && \
     echo 'cd /app' >> /app/run_azure_download.sh && \
+    echo 'echo "$(date): Starting Azure blob download..." >> /app/logs/cron.log' >> /app/run_azure_download.sh && \
     echo 'source venv_azure/bin/activate' >> /app/run_azure_download.sh && \
     echo 'python3 azure_blob_downloader.py >> /app/logs/cron.log 2>&1' >> /app/run_azure_download.sh && \
+    echo 'echo "$(date): Azure blob download completed with exit code $?" >> /app/logs/cron.log' >> /app/run_azure_download.sh && \
     chmod +x /app/run_azure_download.sh
 
 # Setup cron job (runs twice daily at 6:00 AM and 6:00 PM)

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   fw_log_decoder:
     build: .
@@ -7,9 +5,14 @@ services:
       - "80:8080"   # HTTP
       - "443:8443"  # HTTPS
     volumes:
-      - ./decoders:/app/decoders:ro
-      - ./ssl:/etc/ssl/certs:ro  # Mount SSL certificates
+      - ./ssl:/etc/ssl/certs:ro  # Mount SSL certificates (optional)
+      - fw_logs:/app/logs        # Persistent logs
+      - fw_downloads:/app/downloads  # Persistent downloads
     environment:
       - RUST_LOG=info
       - DOMAIN=${DOMAIN:-localhost}
     restart: unless-stopped
+
+volumes:
+  fw_logs:
+  fw_downloads:

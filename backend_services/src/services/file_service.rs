@@ -1,11 +1,16 @@
 use std::{
     fs::File,
-    io::{Write, Read},
+    io::Write,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 use axum::extract::Multipart;
-use crate::{config::Config, services::decoder_service::ServiceError, parser::{parse_binary_data, LogDecoder}};
+use syslog_decoder::SyslogParser;
+use crate::{
+    config::Config, 
+    services::decoder_service::ServiceError, 
+    parser::session_parser::parse_log_sessions
+};
 
 pub struct FileProcessor {
     config: Config,
@@ -60,35 +65,36 @@ impl FileProcessor {
             return Err(ServiceError::NotFound(format!("Dictionary file '{}' not found in downloads", dict_filename)));
         }
         
-        tracing::info!("Starting integrated log decoder with dictionary: {} and log level {}", dict_filename, log_level);
-        
-        // Read the binary file
-        let mut file = File::open(input_file)
-            .map_err(|e| ServiceError::IoError(e))?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .map_err(|e| ServiceError::IoError(e))?;
+        println!("Starting syslog parser library with dictionary: {} and log level {}", dict_filename, log_level);
         
         // Parse log level
-        let log_level: i32 = log_level.parse()
+        let log_level_num: u8 = log_level.parse()
             .map_err(|_| ServiceError::InvalidInput("Invalid log level".to_string()))?;
-            
-        // Parse binary data
-        let parsed_data = parse_binary_data(&contents)
-            .map_err(|e| ServiceError::InvalidInput(format!("Failed to parse binary data: {}", e)))?;
         
-        // Create log decoder with dictionary
-        let decoder = LogDecoder::new(dict_path.to_str().unwrap())
+        // Create syslog parser with dictionary
+        let parser = SyslogParser::new(&dict_path)
             .map_err(|e| ServiceError::InvalidInput(format!("Failed to load dictionary: {}", e)))?;
         
-        // Decode logs
-        let decoded_logs = decoder.decode_logs(parsed_data, log_level);
+        // Parse binary file
+        let parsed_logs = parser.parse_binary(input_file, log_level_num)
+            .map_err(|e| ServiceError::InvalidInput(format!("Failed to parse binary file: {}", e)))?;
         
-        // Join all decoded logs with newlines
-        let result = decoded_logs.join("\n");
+        // Format logs into strings
+        let formatted_logs = parser.format_logs(&parsed_logs);
         
-        tracing::info!("Log decoding completed successfully, {} entries processed", decoded_logs.len());
+        // Join all formatted logs with newlines for session parsing
+        let decoded_text = formatted_logs.join("\n");
         
-        Ok(result)
+        // Parse into sessions
+        let sessions = parse_log_sessions(&decoded_text);
+        
+        // Return sessions as JSON
+        let sessions_json = serde_json::to_string(&sessions)
+            .map_err(|e| ServiceError::InvalidInput(format!("Failed to serialize sessions: {}", e)))?;
+        
+        println!("Syslog parsing completed successfully, {} logs processed, {} sessions created", 
+                 formatted_logs.len(), sessions.len());
+        
+        Ok(sessions_json)
     }
 }

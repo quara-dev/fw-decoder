@@ -1,5 +1,6 @@
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen::prelude::*;
+use crate::types::LogSession;
 
 pub async fn fetch_versions() -> Result<Vec<String>, JsValue> {
     let window = web_sys::window().ok_or("window not available")?;
@@ -14,7 +15,7 @@ pub async fn fetch_versions() -> Result<Vec<String>, JsValue> {
     Ok(versions)
 }
 
-pub async fn decode_log_file(file: web_sys::File, version: String, log_level: String) -> Result<String, JsValue> {
+pub async fn decode_log_file(file: web_sys::File, version: String, log_level: String) -> Result<Vec<LogSession>, JsValue> {
     let form = web_sys::FormData::new()?;
     form.append_with_blob("file", &file)?;
     
@@ -27,8 +28,11 @@ pub async fn decode_log_file(file: web_sys::File, version: String, log_level: St
     let window = web_sys::window().ok_or("window not available")?;
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
     let resp: web_sys::Response = resp_value.dyn_into()?;
-    let text = JsFuture::from(resp.text()?).await?;
-    let raw = text.as_string().unwrap_or_else(|| format!("{:?}", text));
+    let json = JsFuture::from(resp.json()?).await?;
     
-    Ok(raw)
+    // Parse the JSON response as sessions
+    let sessions: Vec<LogSession> = serde_wasm_bindgen::from_value(json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse sessions: {}", e)))?;
+    
+    Ok(sessions)
 }

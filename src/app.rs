@@ -1,11 +1,9 @@
 use yew::prelude::*;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::platform::spawn_local;
-use wasm_bindgen::prelude::*;
 
 use crate::types::LogSession;
 use crate::api::{fetch_versions, decode_log_file};
-use crate::parser::parse_log_sessions;
 use crate::components::EnhancedSessionView;
 
 #[derive(Clone, PartialEq)]
@@ -103,53 +101,22 @@ pub fn app(_props: &()) -> Html {
                     progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
                     
                     match decode_log_file(file, version, log_level).await {
-                        Ok(raw) => {
-                            progress_message.set("Parsing decoded content...".to_string());
-                            web_sys::console::log_1(&format!("Decoder response: {}", raw.clone()).into());
+                        Ok(sessions) => {
+                            progress_message.set("Processing completed successfully!".to_string());
                             
-                            // Check if response is empty or just whitespace
-                            if raw.trim().is_empty() {
-                                processing_state.set(ProcessingState::Error("Decoder returned empty result. File may be invalid or corrupted.".to_string()));
-                                progress_message.set("No output from decoder".to_string());
+                            if sessions.is_empty() {
+                                processing_state.set(ProcessingState::Error("Decoder returned no sessions. File may be invalid or log level too restrictive.".to_string()));
+                                progress_message.set("No sessions found".to_string());
                                 log_sessions.set(vec![LogSession {
                                     id: 0,
-                                    content: "No output from decoder. The file may be invalid, corrupted, or not in the expected format.".to_string(),
+                                    content: "No sessions found. The file may be invalid, corrupted, or the log level filter may be too restrictive.".to_string(),
                                     timestamp: None,
                                 }]);
-                                return;
+                            } else {
+                                log_sessions.set(sessions.clone());
+                                processing_state.set(ProcessingState::Success);
+                                progress_message.set(format!("Processing completed successfully! Found {} sessions", sessions.len()));
                             }
-                            
-                            // Use setTimeout to allow UI to update before parsing
-                            let processing_state_inner = processing_state.clone();
-                            let log_sessions_inner = log_sessions.clone();
-                            let progress_message_inner = progress_message.clone();
-                            let raw_inner = raw.clone();
-                            
-                            let closure = Closure::wrap(Box::new(move || {
-                                // Parse the log content into sessions
-                                let sessions = parse_log_sessions(&raw_inner);
-                                if sessions.is_empty() {
-                                    log_sessions_inner.set(vec![LogSession {
-                                        id: 0,
-                                        content: "Decoder output did not contain any parseable log sessions.".to_string(),
-                                        timestamp: None,
-                                    }]);
-                                    processing_state_inner.set(ProcessingState::Error("No log sessions found in decoder output".to_string()));
-                                    progress_message_inner.set("No log sessions found".to_string());
-                                } else {
-                                    log_sessions_inner.set(sessions);
-                                    processing_state_inner.set(ProcessingState::Success);
-                                    progress_message_inner.set("Processing completed successfully!".to_string());
-                                }
-                            }) as Box<dyn Fn()>);
-                            
-                            web_sys::window()
-                                .unwrap()
-                                .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                    closure.as_ref().unchecked_ref(),
-                                    100
-                                ).unwrap();
-                            closure.forget();
                         },
                         Err(e) => {
                             let error_msg = format!("Error decoding file: {:?}", e);
@@ -214,7 +181,7 @@ pub fn app(_props: &()) -> Html {
                     >
                         { match &*processing_state {
                             ProcessingState::Loading => "Processing...",
-                            _ => "Submit"
+                            _ => "Decode Log"
                         }}
                     </button>
                 </div>
