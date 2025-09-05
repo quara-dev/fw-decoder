@@ -10,7 +10,7 @@ services:
       - fw_downloads:/app/downloads  # Persistent downloads
     environment:
       RUST_LOG: info
-      DOMAIN: "${DOMAIN-localhost}"
+      DOMAIN: ${DOMAIN}
     restart: unless-stopped
 
 volumes:
