@@ -8,6 +8,7 @@ Runs twice daily via cron job.
 import os
 import sys
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from azure.storage.blob import BlobServiceClient
@@ -86,11 +87,36 @@ def create_sample_config():
     print(f"Sample configuration created at {CONFIG_FILE}")
     print("Please edit the file with your Azure credentials and settings.")
 
-def download_blob_files(config, logger):
+def clear_download_directory(download_dir, logger):
+    """Clear all files in the download directory"""
+    try:
+        if download_dir.exists():
+            logger.info(f"Clearing existing files in {download_dir}")
+            # Remove all files and subdirectories
+            for item in download_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+                    logger.debug(f"Deleted file: {item}")
+                elif item.is_dir():
+                    shutil.rmtree(item)
+                    logger.debug(f"Deleted directory: {item}")
+            logger.info("Download directory cleared successfully")
+        else:
+            logger.info(f"Download directory {download_dir} doesn't exist, will be created")
+    except Exception as e:
+        logger.error(f"Error clearing download directory: {e}")
+        raise
+
+def download_blob_files(config, logger, clear_existing=False):
     """Download all files from Azure blob container"""
     try:
         # Create download directory
         download_dir = Path(config.get('download_directory', DOWNLOAD_DIR))
+        
+        # Clear existing files if requested
+        if clear_existing:
+            clear_download_directory(download_dir, logger)
+            
         download_dir.mkdir(exist_ok=True)
         
         # Initialize blob service client
@@ -131,8 +157,8 @@ def download_blob_files(config, logger):
                     skipped_count += 1
                     continue
                 
-                # Check if file already exists
-                if local_path.exists() and not config.get('overwrite_existing', False):
+                # Check if file already exists (only relevant if not clearing existing)
+                if not clear_existing and local_path.exists() and not config.get('overwrite_existing', False):
                     logger.debug(f"Skipping {blob_name} - file already exists")
                     skipped_count += 1
                     continue
@@ -171,6 +197,8 @@ def main():
                        help='Create sample configuration file')
     parser.add_argument('--config', default=CONFIG_FILE,
                        help='Configuration file path')
+    parser.add_argument('--clear-existing', action='store_true',
+                       help='Clear all existing files before downloading new ones')
     
     args = parser.parse_args()
     
@@ -199,7 +227,7 @@ def main():
         sys.exit(1)
     
     # Download files
-    downloaded, skipped, errors = download_blob_files(config, logger)
+    downloaded, skipped, errors = download_blob_files(config, logger, clear_existing=args.clear_existing)
     
     if errors > 0:
         logger.warning(f"Process completed with {errors} errors")

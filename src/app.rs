@@ -3,7 +3,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::platform::spawn_local;
 
 use crate::types::LogSession;
-use crate::api::{fetch_versions, decode_log_file_with_options};
+use crate::api::{fetch_versions, decode_log_file_with_options, refresh_azure_files};
 use crate::components::EnhancedSessionView;
 
 #[derive(Clone, PartialEq)]
@@ -24,6 +24,7 @@ pub fn app(_props: &()) -> Html {
     let file = use_state(|| None);
     let processing_state = use_state(|| ProcessingState::Idle);
     let progress_message = use_state(|| String::new());
+    let refreshing = use_state(|| false);
 
     // Fetch versions from backend on mount
     {
@@ -77,6 +78,49 @@ pub fn app(_props: &()) -> Html {
             let target = event.target_unchecked_into::<HtmlInputElement>();
             let file_obj = target.files().and_then(|list| list.get(0));
             file.set(file_obj);
+        })
+    };
+
+    let on_refresh_click = {
+        let versions = versions.clone();
+        let selected_version = selected_version.clone();
+        let refreshing = refreshing.clone();
+        let progress_message = progress_message.clone();
+        Callback::from(move |_| {
+            let versions = versions.clone();
+            let selected_version = selected_version.clone();
+            let refreshing = refreshing.clone();
+            let progress_message = progress_message.clone();
+            
+            refreshing.set(true);
+            progress_message.set("Refreshing files from Azure blob...".to_string());
+            
+            spawn_local(async move {
+                match refresh_azure_files().await {
+                    Ok(message) => {
+                        progress_message.set(message);
+                        
+                        // Refresh the versions list after successful Azure refresh
+                        match fetch_versions().await {
+                            Ok(v) => {
+                                if let Some(first) = v.get(0) {
+                                    selected_version.set(first.clone());
+                                }
+                                versions.set(v);
+                            },
+                            Err(e) => {
+                                web_sys::console::log_1(&format!("Error fetching versions after refresh: {:?}", e).into());
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        let error_msg = format!("Failed to refresh Azure files: {:?}", e);
+                        progress_message.set(error_msg);
+                        web_sys::console::log_1(&format!("Error refreshing Azure files: {:?}", e).into());
+                    }
+                }
+                refreshing.set(false);
+            });
         })
     };
 
@@ -151,11 +195,41 @@ pub fn app(_props: &()) -> Html {
                 
                 <div style="display:flex; flex-direction:column; gap:0.5em;">
                     <label style="font-weight:bold; color:#555;">{ "Decoder Version:" }</label>
-                    <select onchange={on_version_change} style="width:100%; padding:0.5em; border:1px solid #ccc; border-radius:4px;" value={(*selected_version).clone()}>
-                        { for versions.iter().map(|version| {
-                            html! { <option value={version.clone()}>{ version }</option> }
-                        })}
-                    </select>
+                    <div style="display:flex; gap:0.5em; align-items:center;">
+                        <select 
+                            onchange={on_version_change} 
+                            style="flex:1; padding:0.5em; border:1px solid #ccc; border-radius:4px;" 
+                            value={(*selected_version).clone()}
+                        >
+                            { for versions.iter().map(|version| {
+                                html! { <option value={version.clone()}>{ version }</option> }
+                            })}
+                        </select>
+                        <button 
+                            onclick={on_refresh_click}
+                            disabled={*refreshing}
+                            style={format!(
+                                "padding:0.5em 0.75em; border:1px solid #007bff; border-radius:4px; {}",
+                                if *refreshing {
+                                    "background:#f8f9fa; color:#6c757d; cursor:not-allowed;"
+                                } else {
+                                    "background:#007bff; color:white; cursor:pointer;"
+                                }
+                            )}
+                            title="Refresh files from Azure blob storage"
+                        >
+                            { if *refreshing { "🔄" } else { "🔄" } }
+                        </button>
+                    </div>
+                    { if *refreshing {
+                        html! {
+                            <div style="font-size:0.8em; color:#007bff; margin-top:0.25em;">
+                                { &*progress_message }
+                            </div>
+                        }
+                    } else {
+                        html! {}
+                    }}
                 </div>
                 
                 <div style="display:flex; flex-direction:column; gap:0.5em;">

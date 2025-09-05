@@ -3,7 +3,8 @@ use axum::{
     http::{Response, StatusCode, header},
     response::Json,
 };
-use std::sync::Arc;
+use std::{sync::Arc, process::Command};
+use tokio::task;
 
 use crate::{
     config::Config,
@@ -55,6 +56,48 @@ pub async fn decode_file(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
         )),
+    }
+}
+
+pub async fn refresh_azure_files(State(_config): State<Arc<Config>>) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Run the Azure blob downloader script in the background with virtual environment activated
+    // Use --clear-existing flag to delete old files before downloading
+    let result = task::spawn_blocking(move || {
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg("cd /app && source venv_azure/bin/activate && python3 azure_blob_downloader.py --clear-existing")
+            .output();
+        
+        match output {
+            Ok(output) => {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok(format!("Azure files refresh completed successfully: {}", stdout))
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(format!("Azure files refresh failed: {}", stderr))
+                }
+            }
+            Err(e) => Err(format!("Failed to execute Azure downloader script: {}", e))
+        }
+    }).await;
+    
+    match result {
+        Ok(Ok(message)) => {
+            Ok(Json(serde_json::json!({
+                "status": "success",
+                "message": message
+            })))
+        }
+        Ok(Err(error)) => {
+            Ok(Json(serde_json::json!({
+                "status": "error",
+                "message": error
+            })))
+        }
+        Err(_) => {
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 

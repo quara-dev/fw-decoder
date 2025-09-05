@@ -38,3 +38,27 @@ pub async fn decode_log_file_with_options(file: web_sys::File, version: String, 
     
     Ok(sessions)
 }
+
+pub async fn refresh_azure_files() -> Result<String, JsValue> {
+    let window = web_sys::window().ok_or("window not available")?;
+    
+    let opts = web_sys::RequestInit::new();
+    opts.set_method("POST");
+    
+    let request = web_sys::Request::new_with_str_and_init("/api/refresh", &opts)?;
+    let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
+    let resp: web_sys::Response = resp_value.dyn_into()?;
+    
+    if !resp.ok() {
+        return Err(JsValue::from_str("Failed to refresh Azure files"));
+    }
+    
+    let json = JsFuture::from(resp.json()?).await?;
+    let response: serde_json::Value = serde_wasm_bindgen::from_value(json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse response: {}", e)))?;
+    
+    Ok(response.get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("Azure files refreshed successfully")
+        .to_string())
+}
