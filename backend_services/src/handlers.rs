@@ -71,8 +71,8 @@ pub async fn refresh_azure_files(State(_config): State<Arc<Config>>) -> Result<J
         match output {
             Ok(output) => {
                 if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    Ok(format!("Azure files refresh completed successfully: {}", stdout))
+                    // Return a clean success message instead of verbose logs
+                    Ok("Files refreshed successfully".to_string())
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     Err(format!("Azure files refresh failed: {}", stderr))

@@ -23,7 +23,7 @@ pub fn app(_props: &()) -> Html {
     let log_sessions = use_state(|| Vec::<LogSession>::new());
     let file = use_state(|| None);
     let processing_state = use_state(|| ProcessingState::Idle);
-    let progress_message = use_state(|| String::new());
+    let decode_progress_message = use_state(|| String::new()); // For decode operations
     let refreshing = use_state(|| false);
 
     // Fetch versions from backend on mount
@@ -85,21 +85,17 @@ pub fn app(_props: &()) -> Html {
         let versions = versions.clone();
         let selected_version = selected_version.clone();
         let refreshing = refreshing.clone();
-        let progress_message = progress_message.clone();
         Callback::from(move |_| {
             let versions = versions.clone();
             let selected_version = selected_version.clone();
             let refreshing = refreshing.clone();
-            let progress_message = progress_message.clone();
             
+            // Disable the button immediately
             refreshing.set(true);
-            progress_message.set("Refreshing files from Azure blob...".to_string());
             
             spawn_local(async move {
                 match refresh_azure_files().await {
-                    Ok(message) => {
-                        progress_message.set(message);
-                        
+                    Ok(_message) => {
                         // Refresh the versions list after successful Azure refresh
                         match fetch_versions().await {
                             Ok(v) => {
@@ -114,11 +110,10 @@ pub fn app(_props: &()) -> Html {
                         }
                     },
                     Err(e) => {
-                        let error_msg = format!("Failed to refresh Azure files: {:?}", e);
-                        progress_message.set(error_msg);
                         web_sys::console::log_1(&format!("Error refreshing Azure files: {:?}", e).into());
                     }
                 }
+                // Re-enable the button when done (success or error)
                 refreshing.set(false);
             });
         })
@@ -130,14 +125,14 @@ pub fn app(_props: &()) -> Html {
         let file = file.clone();
         let log_sessions = log_sessions.clone();
         let processing_state = processing_state.clone();
-        let progress_message = progress_message.clone();
+        let decode_progress_message = decode_progress_message.clone();
         Callback::from(move |_| {
             let version = (*selected_version).clone();
             let log_level = (*log_level).clone();
             let file_opt = (*file).clone();
             let log_sessions = log_sessions.clone();
             let processing_state = processing_state.clone();
-            let progress_message = progress_message.clone();
+            let decode_progress_message = decode_progress_message.clone();
             
             if file_opt.is_none() {
                 processing_state.set(ProcessingState::Error("No file selected".to_string()));
@@ -146,20 +141,20 @@ pub fn app(_props: &()) -> Html {
             
             // Set loading state immediately
             processing_state.set(ProcessingState::Loading);
-            progress_message.set("Uploading file and starting decoding process...".to_string());
+            decode_progress_message.set("Uploading file and starting decoding process...".to_string());
             
             spawn_local(async move {
                 if let Some(file) = file_opt {
                     // Update progress message
-                    progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
+                    decode_progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
                     
                     match decode_log_file_with_options(file, version, log_level, false).await {
                         Ok(sessions) => {
-                            progress_message.set("Processing completed successfully!".to_string());
+                            decode_progress_message.set("Processing completed successfully!".to_string());
                             
                             if sessions.is_empty() {
                                 processing_state.set(ProcessingState::Error("Decoder returned no sessions. File may be invalid or log level too restrictive.".to_string()));
-                                progress_message.set("No sessions found".to_string());
+                                decode_progress_message.set("No sessions found".to_string());
                                 log_sessions.set(vec![LogSession {
                                     id: 0,
                                     content: "No sessions found. The file may be invalid, corrupted, or the log level filter may be too restrictive.".to_string(),
@@ -168,14 +163,14 @@ pub fn app(_props: &()) -> Html {
                             } else {
                                 log_sessions.set(sessions.clone());
                                 processing_state.set(ProcessingState::Success);
-                                progress_message.set(format!("Processing completed successfully! Found {} sessions", sessions.len()));
+                                decode_progress_message.set(format!("Processing completed successfully! Found {} sessions", sessions.len()));
                             }
                         },
                         Err(e) => {
                             let error_msg = format!("Error decoding file: {:?}", e);
                             web_sys::console::log_1(&error_msg.clone().into());
                             processing_state.set(ProcessingState::Error(error_msg.clone()));
-                            progress_message.set(error_msg);
+                            decode_progress_message.set(error_msg);
                             log_sessions.set(vec![LogSession {
                                 id: 0,
                                 content: format!("Error: {:?}", e),
@@ -218,18 +213,9 @@ pub fn app(_props: &()) -> Html {
                             )}
                             title="Refresh files from Azure blob storage"
                         >
-                            { if *refreshing { "🔄" } else { "🔄" } }
+                            { if *refreshing { "🔄 Refreshing..." } else { "🔄 Refresh" } }
                         </button>
                     </div>
-                    { if *refreshing {
-                        html! {
-                            <div style="font-size:0.8em; color:#007bff; margin-top:0.25em;">
-                                { &*progress_message }
-                            </div>
-                        }
-                    } else {
-                        html! {}
-                    }}
                 </div>
                 
                 <div style="display:flex; flex-direction:column; gap:0.5em;">
@@ -295,7 +281,7 @@ pub fn app(_props: &()) -> Html {
                                 <strong style="color:#0056b3;">{ "Processing..." }</strong>
                             </div>
                             <div style="margin-top:0.5em; color:#0056b3; font-size:0.9em;">
-                                { &*progress_message }
+                                { &*decode_progress_message }
                             </div>
                             <div style="margin-top:0.5em; color:#666; font-size:0.8em;">
                                 { "Please wait while the executable processes your file. This may take several minutes for large files." }
@@ -306,7 +292,7 @@ pub fn app(_props: &()) -> Html {
                         <div style="margin-top:1em; padding:1em; background:#d4edda; border:1px solid #c3e6cb; border-radius:4px;">
                             <strong style="color:#155724;">{ "✓ Success!" }</strong>
                             <div style="margin-top:0.5em; color:#155724; font-size:0.9em;">
-                                { &*progress_message }
+                                { &*decode_progress_message }
                             </div>
                         </div>
                     },
