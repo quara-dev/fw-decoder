@@ -55,7 +55,7 @@ impl FileProcessor {
         Err(ServiceError::InvalidInput("No file found in upload".to_string()))
     }
 
-    pub async fn run_decoder(&self, input_file: &PathBuf, firmware_version: &str, log_level: &str) -> Result<String, ServiceError> {
+    pub async fn run_decoder(&self, input_file: &PathBuf, firmware_version: &str, log_level: &str, include_log_level: bool) -> Result<String, ServiceError> {
         // Use the firmware version to find the corresponding dictionary file in downloads
         let dict_filename = format!("{}.log", firmware_version);
         let dict_path = self.config.downloads_dir().join(&dict_filename);
@@ -65,7 +65,8 @@ impl FileProcessor {
             return Err(ServiceError::NotFound(format!("Dictionary file '{}' not found in downloads", dict_filename)));
         }
         
-        println!("Starting syslog parser library with dictionary: {} and log level {}", dict_filename, log_level);
+        let log_level_suffix = if include_log_level { " with log levels" } else { "" };
+        println!("Starting syslog parser library with dictionary: {} and log level {}{}", dict_filename, log_level, log_level_suffix);
         
         // Parse log level
         let log_level_num: u8 = log_level.parse()
@@ -79,8 +80,8 @@ impl FileProcessor {
         let parsed_logs = parser.parse_binary(input_file, log_level_num)
             .map_err(|e| ServiceError::InvalidInput(format!("Failed to parse binary file: {}", e)))?;
         
-        // Format logs into strings
-        let formatted_logs = parser.format_logs(&parsed_logs);
+        // Format logs into strings with or without log levels
+        let formatted_logs = parser.format_logs_with_options(&parsed_logs, include_log_level);
         
         // Join all formatted logs with newlines for session parsing
         let decoded_text = formatted_logs.join("\n");

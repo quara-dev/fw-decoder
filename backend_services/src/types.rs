@@ -2,6 +2,8 @@
 pub struct DecoderQuery {
     pub version: String,
     pub log_level: String,
+    #[serde(default)]
+    pub include_log_level: bool,
 }
 
 #[derive(serde::Serialize)]

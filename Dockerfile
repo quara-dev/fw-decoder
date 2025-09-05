@@ -9,7 +9,7 @@ COPY . .
 RUN wasm-pack build --target web
 
 # Build backend with integrated log decoder
-WORKDIR /app/backend
+WORKDIR /app/backend_services
 RUN cargo build --release
 
 # Runtime stage
@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend binary
-COPY --from=builder /app/backend/target/release/fw_log_backend /usr/local/bin/
+COPY --from=builder /app/backend_services/target/release/fw_log_backend /usr/local/bin/
 
 # Copy frontend files
 COPY --from=builder /app/index.html /usr/share/nginx/html/

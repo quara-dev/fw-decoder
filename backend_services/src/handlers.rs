@@ -40,7 +40,7 @@ pub async fn decode_file(
     };
 
     // Run decoder
-    match file_processor.run_decoder(&filepath, &query.version, &query.log_level).await {
+    match file_processor.run_decoder(&filepath, &query.version, &query.log_level, query.include_log_level).await {
         Ok(result) => Ok(Response::builder()
             .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
             .body(result)

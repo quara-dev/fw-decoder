@@ -3,7 +3,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::platform::spawn_local;
 
 use crate::types::LogSession;
-use crate::api::{fetch_versions, decode_log_file};
+use crate::api::{fetch_versions, decode_log_file_with_options};
 use crate::components::EnhancedSessionView;
 
 #[derive(Clone, PartialEq)]
@@ -19,6 +19,7 @@ pub fn app(_props: &()) -> Html {
     let versions = use_state(|| Vec::<String>::new());
     let selected_version = use_state(|| String::new());
     let log_level = use_state(|| "4".to_string());
+    let include_log_level = use_state(|| false);
     let log_sessions = use_state(|| Vec::<LogSession>::new());
     let file = use_state(|| None);
     let processing_state = use_state(|| ProcessingState::Idle);
@@ -62,6 +63,14 @@ pub fn app(_props: &()) -> Html {
         })
     };
 
+    let on_include_log_level_change = {
+        let include_log_level = include_log_level.clone();
+        Callback::from(move |event: Event| {
+            let target = event.target_unchecked_into::<HtmlInputElement>();
+            include_log_level.set(target.checked());
+        })
+    };
+
     let on_file_change = {
         let file = file.clone();
         Callback::from(move |event: Event| {
@@ -74,6 +83,7 @@ pub fn app(_props: &()) -> Html {
     let on_submit = {
         let selected_version = selected_version.clone();
         let log_level = log_level.clone();
+        let include_log_level = include_log_level.clone();
         let file = file.clone();
         let log_sessions = log_sessions.clone();
         let processing_state = processing_state.clone();
@@ -81,6 +91,7 @@ pub fn app(_props: &()) -> Html {
         Callback::from(move |_| {
             let version = (*selected_version).clone();
             let log_level = (*log_level).clone();
+            let include_log_level = *include_log_level;
             let file_opt = (*file).clone();
             let log_sessions = log_sessions.clone();
             let processing_state = processing_state.clone();
@@ -100,7 +111,7 @@ pub fn app(_props: &()) -> Html {
                     // Update progress message
                     progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
                     
-                    match decode_log_file(file, version, log_level).await {
+                    match decode_log_file_with_options(file, version, log_level, include_log_level).await {
                         Ok(sessions) => {
                             progress_message.set("Processing completed successfully!".to_string());
                             
@@ -164,6 +175,18 @@ pub fn app(_props: &()) -> Html {
                 <div style="display:flex; flex-direction:column; gap:0.5em;">
                     <label style="font-weight:bold; color:#555;">{ "Log File:" }</label>
                     <input type="file" onchange={on_file_change} style="width:100%; padding:0.5em; border:1px solid #ccc; border-radius:4px;" />
+                </div>
+                
+                <div style="display:flex; align-items:center; gap:0.5em;">
+                    <input 
+                        type="checkbox" 
+                        id="include-log-level"
+                        onchange={on_include_log_level_change} 
+                        checked={*include_log_level}
+                    />
+                    <label for="include-log-level" style="color:#555; cursor:pointer;">
+                        { "Include log levels in output (Emergency, Alert, Critical, etc.)" }
+                    </label>
                 </div>
                 
                 <div style="margin-top:1em;">
