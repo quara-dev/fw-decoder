@@ -16,6 +16,7 @@ pub struct LogEntry {
 #[derive(Debug, Clone)]
 pub struct ParsedLog {
     pub timestamp_formatted: String,
+    pub log_level: u8,
     pub module_name: String,
     pub formatted_message: String,
 }
@@ -279,6 +280,7 @@ impl SyslogParser {
 
         Some(ParsedLog {
             timestamp_formatted,
+            log_level: log_entry.log_level,
             module_name: log_entry.module_name.clone(),
             formatted_message,
         })
@@ -323,13 +325,41 @@ impl SyslogParser {
         result
     }
 
+    /// Convert log level number to descriptive string
+    fn log_level_to_string(level: u8) -> &'static str {
+        match level {
+            0 => "Emergency",
+            1 => "Alert", 
+            2 => "Critical",
+            3 => "Error",
+            4 => "Warning",
+            5 => "Notice",
+            6 => "Info",
+            7 => "Debug",
+            _ => "Unknown",
+        }
+    }
+
     /// Get formatted output as strings for compatibility (optimized)
     pub fn format_logs(&self, logs: &[ParsedLog]) -> Vec<String> {
+        self.format_logs_with_options(logs, false)
+    }
+
+    /// Get formatted output as strings with option to include log level
+    pub fn format_logs_with_options(&self, logs: &[ParsedLog], include_log_level: bool) -> Vec<String> {
         logs.iter().map(|log| {
-            format!("{:12}\t[{}]\t{}", 
-                   log.timestamp_formatted,
-                   log.module_name,
-                   log.formatted_message)
+            if include_log_level {
+                format!("{:12}\t[{}]\t[{}]\t{}", 
+                       log.timestamp_formatted,
+                       Self::log_level_to_string(log.log_level),
+                       log.module_name,
+                       log.formatted_message)
+            } else {
+                format!("{:12}\t[{}]\t{}", 
+                       log.timestamp_formatted,
+                       log.module_name,
+                       log.formatted_message)
+            }
         }).collect()
     }
 
@@ -499,5 +529,47 @@ mod tests {
         let parser = SyslogParser::new(dict_file.path()).unwrap();
         let result = parser.parse_binary("/non/existent/binary", 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_level_in_output() {
+        let dict_file = create_test_dictionary();
+        let parser = SyslogParser::new(dict_file.path()).unwrap();
+        
+        let binary_data = create_test_binary();
+        let temp_binary = NamedTempFile::new().unwrap();
+        std::fs::write(temp_binary.path(), binary_data).unwrap();
+        
+        let parsed_logs = parser.parse_binary(temp_binary.path(), 5).unwrap();
+        
+        // Test formatting without log level (default behavior)
+        let formatted_without_level = parser.format_logs(&parsed_logs);
+        assert!(formatted_without_level[0].contains("[TEST_MODULE]"));
+        assert!(!formatted_without_level[0].contains("[Warning]")); // Should not contain log level
+        
+        // Test formatting with log level
+        let formatted_with_level = parser.format_logs_with_options(&parsed_logs, true);
+        assert!(formatted_with_level[0].contains("[Warning]\t[TEST_MODULE]")); // Should contain log level "Warning" (level 4)
+        assert!(formatted_with_level[2].contains("[Alert]\t[SYS_INIT]")); // Should contain log level "Alert" (level 1)
+        
+        // Verify structure: timestamp\t[log_level]\t[module]\tmessage
+        let parts: Vec<&str> = formatted_with_level[0].split('\t').collect();
+        assert_eq!(parts.len(), 4);
+        assert!(parts[1].starts_with('[') && parts[1].ends_with(']')); // log level in brackets
+        assert!(parts[2].starts_with('[') && parts[2].ends_with(']')); // module in brackets
+    }
+
+    #[test]
+    fn test_log_level_strings() {
+        // Test all log level string mappings
+        assert_eq!(SyslogParser::log_level_to_string(0), "Emergency");
+        assert_eq!(SyslogParser::log_level_to_string(1), "Alert");
+        assert_eq!(SyslogParser::log_level_to_string(2), "Critical");
+        assert_eq!(SyslogParser::log_level_to_string(3), "Error");
+        assert_eq!(SyslogParser::log_level_to_string(4), "Warning");
+        assert_eq!(SyslogParser::log_level_to_string(5), "Notice");
+        assert_eq!(SyslogParser::log_level_to_string(6), "Info");
+        assert_eq!(SyslogParser::log_level_to_string(7), "Debug");
+        assert_eq!(SyslogParser::log_level_to_string(255), "Unknown"); // Test unknown level
     }
 }

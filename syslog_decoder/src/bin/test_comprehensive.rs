@@ -68,9 +68,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let parsed_logs = parser.parse_binary(temp_binary.path(), level)?;
         println!("📊 Parsed {} logs", parsed_logs.len());
         
+        // Show both output formats
+        println!("📝 Standard format:");
         let formatted = parser.format_logs(&parsed_logs);
         for (i, log) in formatted.iter().enumerate() {
             println!("  {}: {}", i + 1, log);
+        }
+        
+        if !parsed_logs.is_empty() {
+            println!("📝 Format with log levels:");
+            let formatted_with_levels = parser.format_logs_with_options(&parsed_logs, true);
+            for (i, log) in formatted_with_levels.iter().enumerate() {
+                println!("  {}: {}", i + 1, log);
+            }
         }
     }
     
