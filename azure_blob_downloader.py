@@ -9,16 +9,25 @@ import os
 import sys
 import logging
 import shutil
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from azure.storage.blob import BlobServiceClient
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configuration
 CONFIG_FILE = "azure_config.json"
 LOG_DIR = "logs"
 DOWNLOAD_DIR = "downloads"
+
+# Resource optimization constants
+CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks for streaming downloads
+MAX_CONCURRENT_DOWNLOADS = 3   # Limit concurrent downloads
+DOWNLOAD_TIMEOUT = 600         # 10 minutes timeout per file
+PROGRESS_REPORT_INTERVAL = 50  # Report progress every 50MB
 
 def setup_logging():
     """Setup logging configuration"""
@@ -107,7 +116,75 @@ def clear_download_directory(download_dir, logger):
         logger.error(f"Error clearing download directory: {e}")
         raise
 
-def download_blob_files(config, logger, clear_existing=False):
+def download_blob_with_progress(blob_client, local_path, blob_size, logger):
+    """Download blob with progress reporting and memory efficiency"""
+    try:
+        downloaded_bytes = 0
+        last_progress_report = 0
+        
+        with open(local_path, 'wb') as download_file:
+            # Stream download in chunks to avoid loading entire file into memory
+            stream = blob_client.download_blob()
+            
+            for chunk in stream.chunks():
+                download_file.write(chunk)
+                downloaded_bytes += len(chunk)
+                
+                # Report progress every PROGRESS_REPORT_INTERVAL MB
+                if downloaded_bytes - last_progress_report >= PROGRESS_REPORT_INTERVAL * 1024 * 1024:
+                    progress_pct = (downloaded_bytes / blob_size) * 100 if blob_size > 0 else 0
+                    logger.info(f"Downloaded {downloaded_bytes / (1024*1024):.1f}MB of {blob_size / (1024*1024):.1f}MB ({progress_pct:.1f}%)")
+                    last_progress_report = downloaded_bytes
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error during streaming download: {e}")
+        # Clean up partial file
+        if local_path.exists():
+            local_path.unlink()
+        return False
+
+def download_single_blob(blob_service_client, container_name, blob, config, logger):
+    """Download a single blob with resource management"""
+    try:
+        blob_name = blob.name
+        download_dir = Path(config.get('download_directory', DOWNLOAD_DIR))
+        local_path = download_dir / blob_name
+        
+        # Create subdirectories if needed
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Check file extension filter
+        file_extensions = config.get('file_extensions_filter', [])
+        if file_extensions and not any(blob_name.lower().endswith(ext.lower()) for ext in file_extensions):
+            logger.debug(f"Skipping {blob_name} - extension not in filter")
+            return 'skipped'
+        
+        # Check file size limit
+        max_size_mb = config.get('max_file_size_mb', 100)
+        if blob.size > max_size_mb * 1024 * 1024:
+            logger.warning(f"Skipping {blob_name} - size {blob.size / (1024*1024):.2f}MB exceeds limit of {max_size_mb}MB")
+            return 'skipped'
+        
+        # Download with timeout and progress reporting
+        logger.info(f"Starting download: {blob_name} ({blob.size / (1024*1024):.2f}MB)")
+        
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name, 
+            blob=blob_name
+        )
+        
+        # Use streaming download for memory efficiency
+        if download_blob_with_progress(blob_client, local_path, blob.size, logger):
+            logger.info(f"Successfully downloaded: {blob_name}")
+            return 'downloaded'
+        else:
+            return 'error'
+            
+    except Exception as e:
+        logger.error(f"Error downloading {blob_name}: {e}")
+        return 'error'
     """Download all files from Azure blob container"""
     try:
         # Create download directory
@@ -129,56 +206,35 @@ def download_blob_files(config, logger, clear_existing=False):
         container_client = blob_service_client.get_container_client(container_name)
         
         # List all blobs in container
-        blob_list = container_client.list_blobs()
+        blob_list = list(container_client.list_blobs())  # Convert to list to get count
+        logger.info(f"Found {len(blob_list)} files in container")
         
         downloaded_count = 0
         skipped_count = 0
         error_count = 0
         
+        # Process downloads sequentially but with streaming to manage memory
         for blob in blob_list:
             try:
-                blob_name = blob.name
-                local_path = download_dir / blob_name
+                # Skip if file already exists (only relevant if not clearing existing)
+                if not clear_existing:
+                    local_path = download_dir / blob.name
+                    if local_path.exists() and not config.get('overwrite_existing', False):
+                        logger.debug(f"Skipping {blob.name} - file already exists")
+                        skipped_count += 1
+                        continue
                 
-                # Create subdirectories if needed
-                local_path.parent.mkdir(parents=True, exist_ok=True)
+                result = download_single_blob(blob_service_client, container_name, blob, config, logger)
                 
-                # Check file extension filter
-                file_extensions = config.get('file_extensions_filter', [])
-                if file_extensions and not any(blob_name.lower().endswith(ext.lower()) for ext in file_extensions):
-                    logger.debug(f"Skipping {blob_name} - extension not in filter")
+                if result == 'downloaded':
+                    downloaded_count += 1
+                elif result == 'skipped':
                     skipped_count += 1
-                    continue
-                
-                # Check file size limit
-                max_size_mb = config.get('max_file_size_mb', 100)
-                if blob.size > max_size_mb * 1024 * 1024:
-                    logger.warning(f"Skipping {blob_name} - size {blob.size / (1024*1024):.2f}MB exceeds limit of {max_size_mb}MB")
-                    skipped_count += 1
-                    continue
-                
-                # Check if file already exists (only relevant if not clearing existing)
-                if not clear_existing and local_path.exists() and not config.get('overwrite_existing', False):
-                    logger.debug(f"Skipping {blob_name} - file already exists")
-                    skipped_count += 1
-                    continue
-                
-                # Download the blob
-                logger.info(f"Downloading {blob_name} ({blob.size / (1024*1024):.2f}MB)")
-                
-                blob_client = blob_service_client.get_blob_client(
-                    container=container_name, 
-                    blob=blob_name
-                )
-                
-                with open(local_path, 'wb') as download_file:
-                    download_file.write(blob_client.download_blob().readall())
-                
-                downloaded_count += 1
-                logger.info(f"Successfully downloaded: {blob_name}")
-                
+                else:  # error
+                    error_count += 1
+                    
             except Exception as e:
-                logger.error(f"Error downloading {blob_name}: {e}")
+                logger.error(f"Error processing {blob.name}: {e}")
                 error_count += 1
                 continue
         
@@ -188,6 +244,78 @@ def download_blob_files(config, logger, clear_existing=False):
         
     except Exception as e:
         logger.error(f"Error accessing Azure blob container: {e}")
+        return 0, 0, 1
+
+def download_blob_files(config, logger, clear_existing=False):
+    """Main function to orchestrate the blob download process."""
+    try:
+        # Initialize Azure client
+        blob_service_client = BlobServiceClient.from_connection_string(config['connection_string'])
+        container_client = blob_service_client.get_container_client(config['container_name'])
+        
+        # Clear existing files if requested
+        if clear_existing:
+            download_dir = config.get('download_directory', DOWNLOAD_DIR)
+            if os.path.exists(download_dir):
+                logger.info(f"Clearing existing directory: {download_dir}")
+                import shutil
+                shutil.rmtree(download_dir)
+                os.makedirs(download_dir, exist_ok=True)
+            else:
+                os.makedirs(download_dir, exist_ok=True)
+        
+        # Get list of blobs
+        logger.info("Fetching blob list from container...")
+        blobs = []
+        try:
+            for blob in container_client.list_blobs():
+                blobs.append(blob)
+            logger.info(f"Found {len(blobs)} blobs to process")
+        except Exception as e:
+            logger.error(f"Failed to list blobs: {e}")
+            return 0, 0, 1
+        
+        if not blobs:
+            logger.info("No blobs found in container")
+            return 0, 0, 0
+        
+        # Process downloads with resource management
+        downloaded = 0
+        skipped = 0
+        errors = 0
+        
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS) as executor:
+            # Submit download tasks
+            future_to_blob = {}
+            for blob in blobs:
+                future = executor.submit(download_single_blob, 
+                                       container_client, blob, config, logger)
+                future_to_blob[future] = blob.name
+            
+            # Process completed downloads
+            for future in as_completed(future_to_blob, timeout=DOWNLOAD_TIMEOUT):
+                blob_name = future_to_blob[future]
+                try:
+                    result = future.result(timeout=30)  # 30 second timeout per result
+                    if result == "downloaded":
+                        downloaded += 1
+                    elif result == "skipped":
+                        skipped += 1
+                    else:  # error
+                        errors += 1
+                        logger.error(f"Failed to download {blob_name}")
+                except TimeoutError:
+                    logger.error(f"Timeout downloading {blob_name}")
+                    errors += 1
+                except Exception as e:
+                    logger.error(f"Exception downloading {blob_name}: {e}")
+                    errors += 1
+        
+        logger.info(f"Download summary: {downloaded} downloaded, {skipped} skipped, {errors} errors")
+        return downloaded, skipped, errors
+        
+    except Exception as e:
+        logger.error(f"Critical error in download process: {e}")
         return 0, 0, 1
 
 def main():
