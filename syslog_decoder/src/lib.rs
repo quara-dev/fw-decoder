@@ -34,10 +34,6 @@ pub struct SyslogParser {
     dictionary: HashMap<u32, LogEntry>,
     // Store raw dictionary content for byte-offset lookups
     raw_dictionary: Vec<u8>,
-    // Pre-compiled regex patterns for faster placeholder replacement
-    decimal_pattern: Regex,
-    hex_pattern: Regex,
-    string_pattern: Regex,
 }
 
 impl SyslogParser {
@@ -45,17 +41,9 @@ impl SyslogParser {
     pub fn new<P: AsRef<Path>>(dictionary_path: P) -> Result<Self> {
         let (dictionary, raw_dictionary) = Self::load_dictionary(dictionary_path)?;
         
-        // Pre-compile regex patterns for performance
-        let decimal_pattern = Regex::new(r"%d").unwrap();
-        let hex_pattern = Regex::new(r"%x").unwrap(); 
-        let string_pattern = Regex::new(r"%s").unwrap();
-        
         Ok(Self { 
             dictionary,
             raw_dictionary,
-            decimal_pattern,
-            hex_pattern,
-            string_pattern,
         })
     }
 
@@ -296,31 +284,57 @@ impl SyslogParser {
         let mut result = template.to_string();
         let mut arg_index = 0;
 
-        // Replace %d placeholders with integer arguments using regex
-        result = self.decimal_pattern.replace_all(&result, |_: &regex::Captures| {
+        // First handle consecutive hex pattern "0x%x%x%x..." (at least 2 %x) -> "0x32304644"
+        let consecutive_hex_pattern = Regex::new(r"0x%x(?:%x)+").unwrap(); // Matches 0x%x followed by at least one more %x
+        let mut replacements = Vec::new();
+        
+        for mat in consecutive_hex_pattern.find_iter(&result) {
+            let full_match = mat.as_str();
+            let hex_count = full_match.matches("%x").count();
+            
+            if arg_index + hex_count <= arguments.len() {
+                let mut hex_string = String::from("0x");
+                for _ in 0..hex_count {
+                    hex_string.push_str(&format!("{:02X}", arguments[arg_index] & 0xFF));
+                    arg_index += 1;
+                }
+                replacements.push((mat.range(), hex_string));
+            } else {
+                replacements.push((mat.range(), "<missing>".to_string()));
+            }
+        }
+        
+        // Apply replacements in reverse order to maintain indices
+        for (range, replacement) in replacements.into_iter().rev() {
+            result.replace_range(range, &replacement);
+        }
+
+        // Now handle remaining individual placeholders
+        let combined_pattern = Regex::new(r"%(?:l{0,2}([udx])|([s]))").unwrap();
+        
+        result = combined_pattern.replace_all(&result, |caps: &regex::Captures| {
+            let placeholder = if let Some(long_match) = caps.get(1) {
+                long_match.as_str()
+            } else if let Some(string_match) = caps.get(2) {
+                string_match.as_str()
+            } else {
+                "unknown"
+            };
+            
             if arg_index < arguments.len() {
-                let value = arguments[arg_index].to_string();
+                let value = match placeholder {
+                    "d" => arguments[arg_index].to_string(),
+                    "u" => arguments[arg_index].to_string(), 
+                    "x" => format!("0x{:X}", arguments[arg_index]),
+                    "s" => "<string>".to_string(),
+                    _ => "<unknown>".to_string(),
+                };
                 arg_index += 1;
                 value
             } else {
                 "<missing>".to_string()
             }
         }).to_string();
-
-        // Reset for hex patterns
-        arg_index = 0;
-        result = self.hex_pattern.replace_all(&result, |_: &regex::Captures| {
-            if arg_index < arguments.len() {
-                let value = format!("0x{:X}", arguments[arg_index]);
-                arg_index += 1;
-                value
-            } else {
-                "<missing>".to_string()
-            }
-        }).to_string();
-
-        // Replace %s placeholders (string args would need special handling)
-        result = self.string_pattern.replace_all(&result, "<string>").to_string();
 
         result
     }
@@ -571,5 +585,78 @@ mod tests {
         assert_eq!(SyslogParser::log_level_to_string(6), "Info");
         assert_eq!(SyslogParser::log_level_to_string(7), "Debug");
         assert_eq!(SyslogParser::log_level_to_string(255), "Unknown"); // Test unknown level
+    }
+
+    #[test]
+    fn test_unsigned_placeholder() {
+        let dict_file = create_test_dictionary_with_unsigned();
+        let parser = SyslogParser::new(dict_file.path()).unwrap();
+        
+        // Test %u (unsigned) formatting
+        let result = parser.format_message("Date time set rcvd: %u", &vec![1234567890]);
+        assert_eq!(result, "Date time set rcvd: 1234567890");
+        
+        // Test %lu (long unsigned) formatting
+        let result = parser.format_message("Free space in workspace volume : (%lu kb / %lu kb)", &vec![1024, 2048]);
+        assert_eq!(result, "Free space in workspace volume : (1024 kb / 2048 kb)");
+        
+        // Test mixed placeholders including %lu
+        let result = parser.format_message("Event %d at time %u with status 0x%x and size %lu", &vec![42, 1234567890, 255, 1024]);
+        assert_eq!(result, "Event 42 at time 1234567890 with status 0x0xFF and size 1024");
+        
+        // Test %lu with missing argument
+        let result = parser.format_message("Size: %lu", &vec![]);
+        assert_eq!(result, "Size: <missing>");
+    }
+
+    fn create_test_dictionary_with_unsigned() -> NamedTempFile {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        // Write test dictionary with %u placeholder
+        write!(temp_file, "1;4;protocol.c:123;SYS_PROTOCOL_DATE_TIME;Date time set rcvd: %u").unwrap();
+        write!(temp_file, "\x00").unwrap();
+        temp_file.flush().unwrap();
+        temp_file
+    }
+
+    #[test]
+    fn test_long_format_specifiers() {
+        let dict_file = create_test_dictionary_with_unsigned();
+        let parser = SyslogParser::new(dict_file.path()).unwrap();
+        
+        // Test various long format specifiers
+        let result = parser.format_message("Long unsigned: %lu", &vec![4294967295]);
+        assert_eq!(result, "Long unsigned: 4294967295");
+        
+        let result = parser.format_message("Long decimal: %ld", &vec![123456]);
+        assert_eq!(result, "Long decimal: 123456");
+        
+        let result = parser.format_message("Long hex: %lx", &vec![255]);
+        assert_eq!(result, "Long hex: 0xFF");
+        
+        // Test double long format specifiers (should also work)
+        let result = parser.format_message("Long long: %llu", &vec![9999]);
+        assert_eq!(result, "Long long: 9999");
+        
+        // Test mixed format specifiers
+        let result = parser.format_message("Values: %d %u %x %lu %ld", &vec![1, 2, 3, 4, 5]);
+        assert_eq!(result, "Values: 1 2 0x3 4 5");
+    }
+
+    #[test]
+    fn test_consecutive_hex_formatting() {
+        let dict_file = create_test_dictionary();
+        let parser = SyslogParser::new(dict_file.path()).unwrap();
+        
+        // Test consecutive %x formatting (should be combined into single hex value)
+        let result = parser.format_message("Session is ....0x%x%x%x%x", &vec![0x32, 0x30, 0x46, 0x44]);
+        assert_eq!(result, "Session is ....0x32304644");
+        
+        // Test individual %x (should have separate 0x prefix)
+        let result = parser.format_message("Address %x and value %x", &vec![0x32, 0x44]);
+        assert_eq!(result, "Address 0x32 and value 0x44");
+        
+        // Test mixed case
+        let result = parser.format_message("ID: 0x%x%x, Status: %x", &vec![0xAB, 0xCD, 0xFF]);
+        assert_eq!(result, "ID: 0xABCD, Status: 0xFF");
     }
 }
