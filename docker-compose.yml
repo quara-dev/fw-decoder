@@ -9,8 +9,8 @@ services:
       - fw_logs:/app/logs        # Persistent logs
       - fw_downloads:/app/downloads  # Persistent downloads
     environment:
-      - RUST_LOG=info
-      - DOMAIN=${DOMAIN:-localhost}
+      RUST_LOG: info
+      DOMAIN: "${DOMAIN-localhost}"
     restart: unless-stopped
 
 volumes:
