@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 tempfile = "3.0"
+regex = "1.10"
 
 [lib]
 name = "syslog_decoder"
@@ -17,3 +18,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "syslog_parser"
 path = "src/bin/parser.rs"
+
+[[bin]]
+name = "test_comprehensive"
+path = "src/bin/test_comprehensive.rs"
+
+[[bin]]
+name = "test_offsets"
+path = "src/bin/test_offsets.rs"

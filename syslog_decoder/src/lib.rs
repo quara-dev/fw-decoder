@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use anyhow::{Result, Context};
+use regex::Regex;
 
 /// Represents a log entry from the dictionary
 #[derive(Debug, Clone)]
@@ -28,90 +28,152 @@ struct BinaryLogEntry {
     arguments: Vec<u32>,
 }
 
-/// Syslog parser library
+/// Syslog parser library with optimized parsing
 pub struct SyslogParser {
     dictionary: HashMap<u32, LogEntry>,
+    // Store raw dictionary content for byte-offset lookups
+    raw_dictionary: Vec<u8>,
+    // Pre-compiled regex patterns for faster placeholder replacement
+    decimal_pattern: Regex,
+    hex_pattern: Regex,
+    string_pattern: Regex,
 }
 
 impl SyslogParser {
     /// Create a new parser with dictionary file
     pub fn new<P: AsRef<Path>>(dictionary_path: P) -> Result<Self> {
-        let dictionary = Self::load_dictionary(dictionary_path)?;
-        Ok(Self { dictionary })
+        let (dictionary, raw_dictionary) = Self::load_dictionary(dictionary_path)?;
+        
+        // Pre-compile regex patterns for performance
+        let decimal_pattern = Regex::new(r"%d").unwrap();
+        let hex_pattern = Regex::new(r"%x").unwrap(); 
+        let string_pattern = Regex::new(r"%s").unwrap();
+        
+        Ok(Self { 
+            dictionary,
+            raw_dictionary,
+            decimal_pattern,
+            hex_pattern,
+            string_pattern,
+        })
     }
 
-    /// Load dictionary from .log file
-    fn load_dictionary<P: AsRef<Path>>(path: P) -> Result<HashMap<u32, LogEntry>> {
-        let mut file = File::open(&path)
-            .with_context(|| format!("Failed to open dictionary file: {}", path.as_ref().display()))?;
-        
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .context("Failed to read dictionary file contents")?;
+    /// Load dictionary from .log file (optimized with byte offset support)
+    fn load_dictionary<P: AsRef<Path>>(path: P) -> Result<(HashMap<u32, LogEntry>, Vec<u8>)> {
+        let contents = fs::read(&path)
+            .with_context(|| format!("Failed to read dictionary file: {}", path.as_ref().display()))?;
         
         let mut dictionary = HashMap::new();
-        let mut line_offset = 0u32;
 
-        // Split by NULL character (0x00) instead of newlines
-        let entries: Vec<&[u8]> = contents.split(|&b| b == 0x00).collect();
-
-        for entry_bytes in entries {
-            if entry_bytes.is_empty() {
-                line_offset += 1;
-                continue;
+        // Split by NULL character (0x00) and track byte positions
+        let mut start_pos = 0;
+        for end_pos in contents.iter().enumerate().filter_map(|(i, &b)| if b == 0x00 { Some(i) } else { None }) {
+            if start_pos < end_pos {
+                let entry_bytes = &contents[start_pos..end_pos];
+                let line = String::from_utf8_lossy(entry_bytes);
+                let trimmed = line.trim();
+                
+                if !trimmed.is_empty() {
+                    match Self::parse_dictionary_line(trimmed) {
+                        Ok(entry) => {
+                            dictionary.insert(start_pos as u32, entry);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse dictionary line at byte {}: {} ({})", 
+                                     start_pos, trimmed, e);
+                        }
+                    }
+                }
             }
             
-            // Convert bytes to string
+            start_pos = end_pos + 1; // Skip the NULL character
+        }
+
+        // Handle the last entry if file doesn't end with NULL
+        if start_pos < contents.len() {
+            let entry_bytes = &contents[start_pos..];
             let line = String::from_utf8_lossy(entry_bytes);
             let trimmed = line.trim();
             
-            if trimmed.is_empty() {
-                line_offset += 1;
-                continue;
-            }
-
-            match Self::parse_dictionary_line(trimmed) {
-                Ok(entry) => {
-                    dictionary.insert(line_offset, entry);
-                }
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse dictionary line {}: {} ({})", 
-                             line_offset, trimmed, e);
+            if !trimmed.is_empty() {
+                match Self::parse_dictionary_line(trimmed) {
+                    Ok(entry) => {
+                        dictionary.insert(start_pos as u32, entry);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse dictionary line at byte {}: {} ({})", 
+                                 start_pos, trimmed, e);
+                    }
                 }
             }
-            
-            line_offset += 1;
         }
 
         println!("Loaded {} dictionary entries from {}", 
                  dictionary.len(), path.as_ref().display());
-        Ok(dictionary)
+        Ok((dictionary, contents))
     }
 
-    /// Parse a single dictionary line
-    /// Format: num_args;log_level;source_file:line_number;module_name;log_message
-    fn parse_dictionary_line(line: &str) -> Result<LogEntry> {
-        let parts: Vec<&str> = line.split(';').collect();
-        
-        if parts.len() < 5 {
-            return Err(anyhow::anyhow!("Invalid dictionary format: expected 5 parts, got {}", parts.len()));
+    /// Get dictionary entry by byte offset from raw dictionary content
+    fn get_entry_by_byte_offset(&self, byte_offset: u32) -> Option<LogEntry> {
+        let offset = byte_offset as usize;
+        if offset >= self.raw_dictionary.len() {
+            return None;
         }
 
-        // Skip num_args parsing (parts[0]) - not needed, extracted from binary data
+        // Find the end of this entry (next NULL character or end of file)
+        let mut end_pos = offset;
+        while end_pos < self.raw_dictionary.len() && self.raw_dictionary[end_pos] != 0x00 {
+            end_pos += 1;
+        }
 
-        let log_level = parts[1].trim().parse::<u8>()
+        if end_pos == offset {
+            return None; // Empty entry
+        }
+
+        let entry_bytes = &self.raw_dictionary[offset..end_pos];
+        let line = String::from_utf8_lossy(entry_bytes);
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        match Self::parse_dictionary_line(trimmed) {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                eprintln!("Warning: Failed to parse dictionary entry at byte offset {}: {} ({})", 
+                         byte_offset, trimmed, e);
+                None
+            }
+        }
+    }
+
+    /// Parse a single dictionary line (optimized)
+    /// Format: num_args;log_level;source_file:line_number;module_name;log_message
+    fn parse_dictionary_line(line: &str) -> Result<LogEntry> {
+        let mut parts = line.splitn(5, ';'); // More efficient - stops after 5 parts
+        
+        // Skip num_args (parts[0])
+        parts.next().context("Missing num_args field")?;
+
+        let log_level = parts.next()
+            .context("Missing log_level field")?
+            .trim()
+            .parse::<u8>()
             .context("Failed to parse log level")?;
 
-        // Skip source file and line number parsing (parts[2]) - not needed
+        // Skip source file and line number (parts[2])
+        parts.next().context("Missing source_file field")?;
         
-        let module_name = parts[3].trim().to_string();
+        let module_name = parts.next()
+            .context("Missing module_name field")?
+            .trim()
+            .to_string();
         
-        // Join remaining parts as log message (in case message contains semicolons)
-        let log_message = if parts.len() > 5 {
-            parts[4..].join(";").trim().to_string()
-        } else {
-            parts[4].trim().to_string()
-        };
+        let log_message = parts.next()
+            .context("Missing log_message field")?
+            .trim()
+            .to_string();
 
         Ok(LogEntry {
             log_level,
@@ -120,10 +182,12 @@ impl SyslogParser {
         })
     }
 
-    /// Parse binary log file and return formatted logs
+    /// Parse binary log file and return formatted logs (optimized)
     pub fn parse_binary<P: AsRef<Path>>(&self, binary_path: P, min_log_level: u8) -> Result<Vec<ParsedLog>> {
         let binary_entries = self.read_binary_file(binary_path)?;
-        let mut parsed_logs = Vec::new();
+        
+        // Pre-allocate vector with estimated capacity
+        let mut parsed_logs = Vec::with_capacity(binary_entries.len());
 
         for entry in binary_entries {
             if let Some(parsed_log) = self.process_binary_entry(&entry, min_log_level) {
@@ -136,16 +200,13 @@ impl SyslogParser {
         Ok(parsed_logs)
     }
 
-    /// Read and parse binary file structure
+    /// Read and parse binary file structure (optimized)
     fn read_binary_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<BinaryLogEntry>> {
-        let mut file = File::open(&path)
-            .with_context(|| format!("Failed to open binary file: {}", path.as_ref().display()))?;
+        let contents = fs::read(&path)
+            .with_context(|| format!("Failed to read binary file: {}", path.as_ref().display()))?;
 
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .context("Failed to read binary file contents")?;
-
-        let mut entries = Vec::new();
+        // Pre-allocate vector with estimated capacity (each entry is min 8 bytes)
+        let mut entries = Vec::with_capacity(contents.len() / 8);
         let mut offset = 0;
 
         while offset + 8 <= contents.len() {
@@ -200,13 +261,10 @@ impl SyslogParser {
         Ok(entries)
     }
 
-    /// Process a single binary entry and create formatted log
+    /// Process a single binary entry and create formatted log (updated for byte offset)
     fn process_binary_entry(&self, entry: &BinaryLogEntry, min_log_level: u8) -> Option<ParsedLog> {
-        // Look up dictionary entry using modulo mapping (handle offset mismatches)
-        let dict_size = self.dictionary.len() as u32;
-        let lookup_key = if dict_size > 0 { entry.log_id % dict_size } else { entry.log_id };
-        
-        let log_entry = self.dictionary.get(&lookup_key)?;
+        // Use byte offset directly instead of modulo mapping
+        let log_entry = self.get_entry_by_byte_offset(entry.log_id)?;
 
         // Filter by log level
         if log_entry.log_level > min_log_level {
@@ -217,7 +275,7 @@ impl SyslogParser {
         let timestamp_formatted = Self::format_timestamp(entry.timestamp_ms);
 
         // Format message with arguments
-        let formatted_message = Self::format_message(&log_entry.log_message, &entry.arguments);
+        let formatted_message = self.format_message(&log_entry.log_message, &entry.arguments);
 
         Some(ParsedLog {
             timestamp_formatted,
@@ -231,42 +289,41 @@ impl SyslogParser {
         format!("{}ms", timestamp_ms)
     }
 
-    /// Format log message by replacing placeholders with arguments
-    fn format_message(template: &str, arguments: &[u32]) -> String {
+    /// Format log message by replacing placeholders with arguments (optimized)
+    fn format_message(&self, template: &str, arguments: &[u32]) -> String {
         let mut result = template.to_string();
         let mut arg_index = 0;
 
-        // Replace %d placeholders with integer arguments
-        while let Some(pos) = result.find("%d") {
+        // Replace %d placeholders with integer arguments using regex
+        result = self.decimal_pattern.replace_all(&result, |_: &regex::Captures| {
             if arg_index < arguments.len() {
-                result.replace_range(pos..pos+2, &arguments[arg_index].to_string());
+                let value = arguments[arg_index].to_string();
                 arg_index += 1;
+                value
             } else {
-                // No more arguments available, replace with placeholder
-                result.replace_range(pos..pos+2, "<missing>");
+                "<missing>".to_string()
             }
-        }
+        }).to_string();
 
-        // Replace %x placeholders with hex arguments  
+        // Reset for hex patterns
         arg_index = 0;
-        while let Some(pos) = result.find("%x") {
+        result = self.hex_pattern.replace_all(&result, |_: &regex::Captures| {
             if arg_index < arguments.len() {
-                result.replace_range(pos..pos+2, &format!("0x{:X}", arguments[arg_index]));
+                let value = format!("0x{:X}", arguments[arg_index]);
                 arg_index += 1;
+                value
             } else {
-                result.replace_range(pos..pos+2, "<missing>");
+                "<missing>".to_string()
             }
-        }
+        }).to_string();
 
         // Replace %s placeholders (string args would need special handling)
-        while let Some(pos) = result.find("%s") {
-            result.replace_range(pos..pos+2, "<string>");
-        }
+        result = self.string_pattern.replace_all(&result, "<string>").to_string();
 
         result
     }
 
-    /// Get formatted output as strings for compatibility
+    /// Get formatted output as strings for compatibility (optimized)
     pub fn format_logs(&self, logs: &[ParsedLog]) -> Vec<String> {
         logs.iter().map(|log| {
             format!("{:12}\t[{}]\t{}", 
@@ -304,20 +361,20 @@ mod tests {
     fn create_test_binary() -> Vec<u8> {
         let mut binary_data = Vec::new();
         
-        // Entry 1: timestamp=0, log_id=0 (0 args, offset 0), no arguments
+        // Entry 1: timestamp=0, log_id=0 (0 args, byte offset 0), no arguments
         binary_data.extend_from_slice(&0u32.to_le_bytes()); // timestamp
-        binary_data.extend_from_slice(&0u32.to_le_bytes()); // log_id (0 args, offset 0)
+        binary_data.extend_from_slice(&0u32.to_le_bytes()); // log_id (0 args, byte offset 0)
         
-        // Entry 2: timestamp=1000, log_id with 2 args at offset 1
+        // Entry 2: timestamp=1000, log_id with 2 args at byte offset 0 (first entry)
         binary_data.extend_from_slice(&1000u32.to_le_bytes()); // timestamp
-        let log_id_with_args = (2u32 << 28) | 0u32; // 2 args, offset 0
+        let log_id_with_args = (2u32 << 28) | 0u32; // 2 args, byte offset 0
         binary_data.extend_from_slice(&log_id_with_args.to_le_bytes());
         binary_data.extend_from_slice(&42u32.to_le_bytes()); // arg1
         binary_data.extend_from_slice(&100u32.to_le_bytes()); // arg2
         
-        // Entry 3: timestamp=2000, log_id=1 (0 args, offset 1) 
+        // Entry 3: timestamp=2000, log_id=47 (0 args, byte offset 47 for SYS_INIT entry) 
         binary_data.extend_from_slice(&2000u32.to_le_bytes()); // timestamp
-        binary_data.extend_from_slice(&1u32.to_le_bytes()); // log_id (0 args, offset 1)
+        binary_data.extend_from_slice(&47u32.to_le_bytes()); // log_id (0 args, byte offset 47)
         
         binary_data
     }
@@ -359,16 +416,19 @@ mod tests {
 
     #[test]
     fn test_message_formatting() {
+        let dict_file = create_test_dictionary();
+        let parser = SyslogParser::new(dict_file.path()).unwrap();
+        
         let args = vec![42, 100];
-        let result = SyslogParser::format_message("Trigger no %d at %d", &args);
+        let result = parser.format_message("Trigger no %d at %d", &args);
         assert_eq!(result, "Trigger no 42 at 100");
         
         // Test with missing arguments
-        let result = SyslogParser::format_message("Value %d and %d", &vec![42]);
+        let result = parser.format_message("Value %d and %d", &vec![42]);
         assert_eq!(result, "Value 42 and <missing>");
         
         // Test with hex formatting
-        let result = SyslogParser::format_message("Address 0x%x", &vec![255]);
+        let result = parser.format_message("Address 0x%x", &vec![255]);
         assert_eq!(result, "Address 0x0xFF");
     }
 
@@ -407,21 +467,24 @@ mod tests {
     }
 
     #[test]
-    fn test_modulo_offset_mapping() {
+    fn test_byte_offset_mapping() {
         let dict_file = create_test_dictionary();
         let parser = SyslogParser::new(dict_file.path()).unwrap();
         
         let mut binary_data = Vec::new();
-        // Create an entry with offset larger than dictionary size
+        // Create an entry that uses byte offset to reference the second entry
         binary_data.extend_from_slice(&5000u32.to_le_bytes()); // timestamp
-        binary_data.extend_from_slice(&1000u32.to_le_bytes()); // offset 1000, should map to 1000 % 3 = 1
+        
+        // Second entry "0;1;init.c:45;SYS_INIT;System started" starts at byte 47
+        let second_entry_offset = 47u32;
+        binary_data.extend_from_slice(&second_entry_offset.to_le_bytes()); // byte offset 47
         
         let temp_binary = NamedTempFile::new().unwrap();
         std::fs::write(temp_binary.path(), binary_data).unwrap();
         
         let parsed_logs = parser.parse_binary(temp_binary.path(), 5).unwrap();
         assert_eq!(parsed_logs.len(), 1);
-        // Should use entry at offset 1 (1000 % 3 = 1)
+        // Should use entry at byte offset 47 (SYS_INIT entry)
         assert_eq!(parsed_logs[0].module_name, "SYS_INIT");
     }
 
