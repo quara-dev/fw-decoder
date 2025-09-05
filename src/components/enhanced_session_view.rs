@@ -1,7 +1,6 @@
 use yew::prelude::*;
 use crate::types::LogSession;
 use std::collections::HashSet;
-use wasm_bindgen::prelude::*;
 
 fn format_epoch_to_readable(timestamp_str: &str) -> String {
     // Remove "Epoch: " prefix if present

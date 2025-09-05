@@ -15,10 +15,6 @@ pub async fn fetch_versions() -> Result<Vec<String>, JsValue> {
     Ok(versions)
 }
 
-pub async fn decode_log_file(file: web_sys::File, version: String, log_level: String) -> Result<Vec<LogSession>, JsValue> {
-    decode_log_file_with_options(file, version, log_level, false).await
-}
-
 pub async fn decode_log_file_with_options(file: web_sys::File, version: String, log_level: String, _include_log_level: bool) -> Result<Vec<LogSession>, JsValue> {
     let form = web_sys::FormData::new()?;
     form.append_with_blob("file", &file)?;

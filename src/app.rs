@@ -19,7 +19,6 @@ pub fn app(_props: &()) -> Html {
     let versions = use_state(|| Vec::<String>::new());
     let selected_version = use_state(|| String::new());
     let log_level = use_state(|| "4".to_string());
-    let include_log_level = use_state(|| false);
     let show_log_levels = use_state(|| false);
     let log_sessions = use_state(|| Vec::<LogSession>::new());
     let file = use_state(|| None);
@@ -84,7 +83,6 @@ pub fn app(_props: &()) -> Html {
     let on_submit = {
         let selected_version = selected_version.clone();
         let log_level = log_level.clone();
-        let include_log_level = include_log_level.clone();
         let file = file.clone();
         let log_sessions = log_sessions.clone();
         let processing_state = processing_state.clone();
@@ -92,7 +90,6 @@ pub fn app(_props: &()) -> Html {
         Callback::from(move |_| {
             let version = (*selected_version).clone();
             let log_level = (*log_level).clone();
-            let include_log_level = *include_log_level;
             let file_opt = (*file).clone();
             let log_sessions = log_sessions.clone();
             let processing_state = processing_state.clone();
@@ -112,7 +109,7 @@ pub fn app(_props: &()) -> Html {
                     // Update progress message
                     progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
                     
-                    match decode_log_file_with_options(file, version, log_level, include_log_level).await {
+                    match decode_log_file_with_options(file, version, log_level, false).await {
                         Ok(sessions) => {
                             progress_message.set("Processing completed successfully!".to_string());
                             

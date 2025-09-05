@@ -1,4 +1,4 @@
-use std::io::{Write, Seek};
+use std::io::Write;
 use tempfile::NamedTempFile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
