@@ -5,6 +5,7 @@ mod types;
 mod parser;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -23,6 +24,7 @@ async fn main() {
         .route("/api/versions", get(get_versions))
         .route("/api/decode", post(decode_file))
         .route("/api/refresh", post(refresh_azure_files))
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB body limit
         .layer(CorsLayer::permissive())
         .with_state(config.clone());
 

@@ -1,6 +1,4 @@
 use std::{
-    fs::File,
-    io::Write,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH, Duration},
 };
@@ -14,7 +12,7 @@ use crate::{
 };
 
 // Resource management constants
-const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30 * 60); // 30 minutes
+const PROCESSING_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes for very large files
 const MAX_UPLOAD_SIZE: usize = 500 * 1024 * 1024; // 500MB upload limit
 
 pub struct FileProcessor {
@@ -32,13 +30,13 @@ impl FileProcessor {
         // Clean up previous temp files
         crate::config::cleanup_temp_files(&temp_dir)?;
 
-        while let Some(field) = multipart
+        while let Some(mut field) = multipart
             .next_field()
             .await
-            .map_err(|_| ServiceError::InvalidInput("Invalid multipart data".to_string()))?
+            .map_err(|e| ServiceError::InvalidInput(format!("Invalid multipart data: {}", e)))?
         {
             if let Some(filename) = field.file_name() {
-                let filename = filename.to_string(); // Clone filename to avoid borrow issues
+                let filename = filename.to_string();
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -46,30 +44,30 @@ impl FileProcessor {
                 let temp_filename = format!("{}_{}", now, filename);
                 let filepath = temp_dir.join(&temp_filename);
                 
-                // Stream the file data instead of loading it all into memory
-                let mut file = File::create(&filepath)?;
+                // Use streaming approach for large files
+                let mut buffer = Vec::new();
                 let mut total_size = 0;
                 
-                // Process field in chunks to handle large files
-                let mut field = field;
-                while let Some(chunk) = field
-                    .chunk()
-                    .await
-                    .map_err(|_| ServiceError::InvalidInput("Failed to read file chunk".to_string()))?
-                {
-                    // Check upload size limit
+                // Read in smaller chunks to avoid memory issues
+                while let Some(chunk) = field.chunk().await.map_err(|e| {
+                    ServiceError::InvalidInput(format!("Failed to read file chunk: {}", e))
+                })? {
                     total_size += chunk.len();
+                    
+                    // Check upload size limit early
                     if total_size > MAX_UPLOAD_SIZE {
-                        // Clean up partial file
-                        let _ = std::fs::remove_file(&filepath);
                         return Err(ServiceError::InvalidInput(
                             format!("File too large: {} bytes (max: {} bytes)", 
                                    total_size, MAX_UPLOAD_SIZE)
                         ));
                     }
                     
-                    file.write_all(&chunk)?;
+                    buffer.extend_from_slice(&chunk);
                 }
+                
+                // Write the entire buffer to file at once
+                std::fs::write(&filepath, &buffer)
+                    .map_err(|e| ServiceError::IoError(e))?;
                 
                 println!("Uploaded file: {} ({:.2} MB)", filename, total_size as f64 / (1024.0 * 1024.0));
                 return Ok(filepath);

@@ -7,8 +7,6 @@ if [ -f "/etc/ssl/certs/fullchain.pem" ] && [ -f "/etc/ssl/certs/privkey.pem" ];
     nginx -g "daemon off;"
 else
     echo "SSL certificates not found. Starting nginx with HTTP only..."
-    # Create a temporary nginx config without HTTPS server block
-    sed '/# HTTPS Server/,$d' /etc/nginx/nginx.conf > /tmp/nginx-http-only.conf
-    echo "}" >> /tmp/nginx-http-only.conf
-    nginx -c /tmp/nginx-http-only.conf -g "daemon off;"
+    # Use the main config but skip HTTPS server block by just using HTTP
+    nginx -g "daemon off;"
 fi

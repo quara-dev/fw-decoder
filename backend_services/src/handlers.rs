@@ -102,8 +102,14 @@ pub async fn refresh_azure_files(State(_config): State<Arc<Config>>) -> Result<J
 }
 
 fn create_error_response(status: StatusCode, message: &str) -> Response<String> {
+    let error_json = serde_json::json!({
+        "status": "error",
+        "message": message
+    });
+    
     Response::builder()
         .status(status)
-        .body(message.to_string())
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .body(error_json.to_string())
         .unwrap()
 }
