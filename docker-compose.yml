@@ -4,8 +4,8 @@ services:
   fw_log_decoder:
     build: .
     ports:
-      - "80:8080"   # HTTP
-      - "443:8443"  # HTTPS
+      - "80:8080"   # HTTP: external port 80 -> internal port 8080
+      - "443:8443"  # HTTPS: external port 443 -> internal port 8443
     volumes:
       # SSL certificates (only mount if they exist on the server)
       # - ../fullchain.pem:/etc/ssl/certs/fullchain.pem:ro  # SSL certificate
