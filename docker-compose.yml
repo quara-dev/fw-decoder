@@ -7,7 +7,9 @@ services:
       - "80:8080"   # HTTP
       - "443:8443"  # HTTPS
     volumes:
-      - ./ssl:/etc/ssl/certs:ro  # Mount SSL certificates (optional)
+      # SSL certificates (only mount if they exist on the server)
+      # - ../fullchain.pem:/etc/ssl/certs/fullchain.pem:ro  # SSL certificate
+      # - ../privkey.pem:/etc/ssl/private/privkey.pem:ro    # SSL private key
       - fw_logs:/app/logs        # Persistent logs
       - fw_downloads:/app/downloads  # Persistent downloads
     environment:
