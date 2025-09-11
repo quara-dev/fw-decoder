@@ -1,0 +1,16 @@
+version: '3.3'
+
+services:
+  fw_log_decoder:
+    volumes:
+      # SSL certificates for production (uncomment when deploying to server with certificates)
+      - ../fullchain.pem:/etc/ssl/certs/fullchain.pem:ro  # SSL certificate
+      - ../privkey.pem:/etc/ssl/private/privkey.pem:ro    # SSL private key
+      - fw_logs:/app/logs        # Persistent logs
+      - fw_downloads:/app/downloads  # Persistent downloads
+
+volumes:
+  fw_logs:
+    driver: local
+  fw_downloads:
+    driver: local
