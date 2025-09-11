@@ -27,8 +27,8 @@ pub async fn decode_file(
     let file_processor = FileProcessor::new((*config).clone());
     
     // Process file upload
-    let filepath = match file_processor.process_upload(multipart).await {
-        Ok(path) => path,
+    let uploaded_files = match file_processor.process_upload(multipart).await {
+        Ok(files) => files,
         Err(ServiceError::InvalidInput(msg)) => {
             return Ok(create_error_response(StatusCode::BAD_REQUEST, &msg));
         }
@@ -41,7 +41,13 @@ pub async fn decode_file(
     };
 
     // Run decoder
-    match file_processor.run_decoder(&filepath, &query.version, &query.log_level, query.include_log_level).await {
+    match file_processor.run_decoder(
+        &uploaded_files.binary_file, 
+        &query.version, 
+        &query.log_level, 
+        query.include_log_level,
+        uploaded_files.custom_decoder_file.as_ref()
+    ).await {
         Ok(result) => Ok(Response::builder()
             .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
             .body(result)

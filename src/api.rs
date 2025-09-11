@@ -15,13 +15,17 @@ pub async fn fetch_versions() -> Result<Vec<String>, JsValue> {
     Ok(versions)
 }
 
-pub async fn decode_log_file_with_options(file: web_sys::File, version: String, log_level: String, _include_log_level: bool) -> Result<Vec<LogSession>, JsValue> {
+pub async fn decode_log_file_with_options(file: web_sys::File, version: String, log_level: String, _include_log_level: bool, custom_decoder_file: Option<web_sys::File>) -> Result<Vec<LogSession>, JsValue> {
     let form = web_sys::FormData::new()?;
     form.append_with_blob("file", &file)?;
     
-    // Always request log levels from backend - frontend will control display
-    let url = format!("/api/decode?version={}&log_level={}&include_log_level=true", 
-                     version, log_level);
+    // Add custom decoder file if provided
+    let use_custom = custom_decoder_file.is_some();
+    if let Some(custom_file) = custom_decoder_file {
+        form.append_with_blob("custom_decoder", &custom_file)?;
+    }
+    let url = format!("/api/decode?version={}&log_level={}&include_log_level=true&use_custom_decoder={}", 
+                     version, log_level, use_custom);
     let opts = web_sys::RequestInit::new();
     opts.set_method("POST");
     opts.set_body(&form.into());

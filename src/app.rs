@@ -22,6 +22,8 @@ pub fn app(_props: &()) -> Html {
     let show_log_levels = use_state(|| false);
     let log_sessions = use_state(|| Vec::<LogSession>::new());
     let file = use_state(|| None);
+    let custom_decoder_file = use_state(|| None);
+    let use_custom_decoder = use_state(|| false);
     let processing_state = use_state(|| ProcessingState::Idle);
     let decode_progress_message = use_state(|| String::new()); // For decode operations
     let refreshing = use_state(|| false);
@@ -81,6 +83,23 @@ pub fn app(_props: &()) -> Html {
         })
     };
 
+    let on_custom_decoder_change = {
+        let use_custom_decoder = use_custom_decoder.clone();
+        Callback::from(move |event: Event| {
+            let target = event.target_unchecked_into::<HtmlInputElement>();
+            use_custom_decoder.set(target.checked());
+        })
+    };
+
+    let on_custom_decoder_file_change = {
+        let custom_decoder_file = custom_decoder_file.clone();
+        Callback::from(move |event: Event| {
+            let target = event.target_unchecked_into::<HtmlInputElement>();
+            let file_obj = target.files().and_then(|list| list.get(0));
+            custom_decoder_file.set(file_obj);
+        })
+    };
+
     let on_refresh_click = {
         let versions = versions.clone();
         let selected_version = selected_version.clone();
@@ -123,6 +142,8 @@ pub fn app(_props: &()) -> Html {
         let selected_version = selected_version.clone();
         let log_level = log_level.clone();
         let file = file.clone();
+        let custom_decoder_file = custom_decoder_file.clone();
+        let use_custom_decoder = use_custom_decoder.clone();
         let log_sessions = log_sessions.clone();
         let processing_state = processing_state.clone();
         let decode_progress_message = decode_progress_message.clone();
@@ -130,12 +151,19 @@ pub fn app(_props: &()) -> Html {
             let version = (*selected_version).clone();
             let log_level = (*log_level).clone();
             let file_opt = (*file).clone();
+            let custom_decoder_file_opt = (*custom_decoder_file).clone();
+            let use_custom = *use_custom_decoder;
             let log_sessions = log_sessions.clone();
             let processing_state = processing_state.clone();
             let decode_progress_message = decode_progress_message.clone();
             
             if file_opt.is_none() {
                 processing_state.set(ProcessingState::Error("No file selected".to_string()));
+                return;
+            }
+            
+            if use_custom && custom_decoder_file_opt.is_none() {
+                processing_state.set(ProcessingState::Error("Custom decoder enabled but no decoder file selected".to_string()));
                 return;
             }
             
@@ -146,9 +174,15 @@ pub fn app(_props: &()) -> Html {
             spawn_local(async move {
                 if let Some(file) = file_opt {
                     // Update progress message
-                    decode_progress_message.set(format!("Processing file: {} (this may take a while for large files)", file.name()));
+                    let decoder_msg = if use_custom {
+                        "with custom decoder"
+                    } else {
+                        "with default decoder"
+                    };
+                    decode_progress_message.set(format!("Processing file: {} {} (this may take a while for large files)", file.name(), decoder_msg));
                     
-                    match decode_log_file_with_options(file, version, log_level, false).await {
+                    let custom_decoder = if use_custom { custom_decoder_file_opt } else { None };
+                    match decode_log_file_with_options(file, version, log_level, false, custom_decoder).await {
                         Ok(sessions) => {
                             decode_progress_message.set("Processing completed successfully!".to_string());
                             
@@ -234,6 +268,37 @@ pub fn app(_props: &()) -> Html {
                     <label style="font-weight:bold; color:#555;">{ "Log File:" }</label>
                     <input type="file" onchange={on_file_change} style="width:100%; padding:0.5em; border:1px solid #ccc; border-radius:4px;" />
                 </div>
+                
+                <div style="display:flex; align-items:center; gap:0.5em;">
+                    <input 
+                        type="checkbox" 
+                        id="use-custom-decoder"
+                        onchange={on_custom_decoder_change} 
+                        checked={*use_custom_decoder}
+                    />
+                    <label for="use-custom-decoder" style="color:#555; cursor:pointer;">
+                        { "Use custom decoder dictionary file" }
+                    </label>
+                </div>
+                
+                { if *use_custom_decoder {
+                    html! {
+                        <div style="display:flex; flex-direction:column; gap:0.5em;">
+                            <label style="font-weight:bold; color:#555;">{ "Custom Decoder File:" }</label>
+                            <input 
+                                type="file" 
+                                onchange={on_custom_decoder_file_change} 
+                                style="width:100%; padding:0.5em; border:1px solid #ccc; border-radius:4px;" 
+                                accept=".bin,.dict,.dec"
+                            />
+                            <div style="color:#666; font-size:0.85em;">
+                                { "Upload a custom decoder dictionary file for your specific firmware version." }
+                            </div>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }}
                 
                 <div style="display:flex; align-items:center; gap:0.5em;">
                     <input 
