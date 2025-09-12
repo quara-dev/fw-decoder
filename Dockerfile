@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     cron \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend binary
